@@ -37,11 +37,11 @@ export function Channels() {
   const [isCreating, setIsCreating] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<number | null>(null);
   const [fetchState, setFetchState] = useState<FetchState>({
-    isLoading: false,
+    isLoading: true,  // Start with true as requested
     error: null,
-    retryCount: 0,
+    retryCount: 0
   });
-  
+
   // Use refs to track mounted state and active requests
   const isMounted = useRef(true);
   const activeRequests = useRef(new Set<AbortController>());
@@ -69,12 +69,12 @@ export function Channels() {
 
     try {
       console.log(`[Channels] Fetching data from ${url} (attempt ${attempt + 1}/${RETRY_COUNT})`);
-      safeSetFetchState(prev => ({
-        ...prev,
-        isLoading: true,
-      }));
-
+      
+      const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+      
       const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      
       if (!response.ok) {
         const error = await response.json();
         throw new Error(error.error || `HTTP error! status: ${response.status}`);
@@ -83,19 +83,23 @@ export function Channels() {
       const data = await response.json();
       console.log(`[Channels] Successfully fetched data from ${url}:`, {
         dataLength: Array.isArray(data) ? data.length : 'single item',
-        timestamp: new Date().toISOString(),
+        timestamp: new Date().toISOString()
       });
 
       // Reset state on successful fetch
       safeSetFetchState(prev => ({
         isLoading: false,
         error: null,
-        retryCount: 0,
+        retryCount: 0
       }));
 
       return data;
     } catch (error) {
-      console.error(`[Channels] Error fetching from ${url}:`, error);
+      console.error(`[Channels] Error fetching from ${url}:`, {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        attempt,
+        timestamp: new Date().toISOString()
+      });
       
       if (!isMounted.current) return null;
 
@@ -108,8 +112,9 @@ export function Channels() {
         console.log(`[Channels] Retrying in ${delay}ms...`);
         
         safeSetFetchState(prev => ({
-          ...prev,
-          retryCount: prev.retryCount + 1,
+          isLoading: true,
+          error: null,
+          retryCount: prev.retryCount + 1
         }));
 
         await new Promise(resolve => setTimeout(resolve, delay));
@@ -119,9 +124,9 @@ export function Channels() {
       safeSetFetchState(prev => ({
         isLoading: false,
         error: error instanceof Error ? error : new Error('Unknown error occurred'),
-        retryCount: attempt + 1,
+        retryCount: attempt + 1
       }));
-
+      
       throw error;
     } finally {
       activeRequests.current.delete(controller);
@@ -134,6 +139,7 @@ export function Channels() {
     {
       revalidateOnFocus: false,
       dedupingInterval: 5000,
+      shouldRetryOnError: false,  // Let our custom retry logic handle it
       onError: (error) => {
         console.error('[Channels] SWR error:', error);
         toast({
@@ -150,6 +156,7 @@ export function Channels() {
     fetchWithRetry,
     {
       revalidateOnFocus: false,
+      shouldRetryOnError: false,
       onError: (error) => {
         console.error('[Channels] Error loading posts:', error);
         toast({
@@ -169,7 +176,11 @@ export function Channels() {
     const description = formData.get('description') as string;
 
     try {
-      console.log('[Channels] Creating new channel:', { name, timestamp: new Date().toISOString() });
+      console.log('[Channels] Creating new channel:', { 
+        name, 
+        timestamp: new Date().toISOString() 
+      });
+      
       const response = await fetch('/api/channels', {
         method: 'POST',
         headers: {
@@ -203,21 +214,19 @@ export function Channels() {
     }
   };
 
-  // Updated loading state condition
-  if (!channels && fetchState.isLoading) {
+  // Updated loading condition check
+  if (!channels && !fetchState.error) {
     return (
       <Layout>
-        <ErrorBoundary>
-          <div className="max-w-6xl mx-auto p-4">
-            <div className="flex flex-col items-center justify-center p-8 space-y-4">
-              <Loader2 className="h-8 w-8 animate-spin" />
-              <p className="text-sm text-muted-foreground">
-                Loading channels...
-                {fetchState.retryCount > 0 && ` (Retry ${fetchState.retryCount}/${RETRY_COUNT})`}
-              </p>
-            </div>
+        <div className="max-w-6xl mx-auto p-4">
+          <div className="flex flex-col items-center justify-center p-8 space-y-4">
+            <Loader2 className="h-8 w-8 animate-spin" />
+            <p className="text-sm text-muted-foreground">
+              Loading channels...
+              {fetchState.retryCount > 0 && ` (Retry ${fetchState.retryCount}/${RETRY_COUNT})`}
+            </p>
           </div>
-        </ErrorBoundary>
+        </div>
       </Layout>
     );
   }
