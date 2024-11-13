@@ -5,6 +5,10 @@ import { db } from "db";
 import { posts, channels } from "db/schema";
 import { eq } from "drizzle-orm";
 import path from "path";
+import { sql } from "drizzle-orm";
+
+// Configure timeout for database queries (30 seconds)
+const QUERY_TIMEOUT = 30000;
 
 const storage = multer.diskStorage({
   destination: "uploads/",
@@ -15,6 +19,20 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ storage });
+
+// Wrapper for database queries with timeout
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number = QUERY_TIMEOUT
+): Promise<T> {
+  const timeout = new Promise<never>((_, reject) => {
+    setTimeout(() => {
+      reject(new Error(`Operation timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]);
+}
 
 export function registerRoutes(app: Express) {
   setupAuth(app);
@@ -28,26 +46,40 @@ export function registerRoutes(app: Express) {
     console.log('[API] Starting channels fetch request');
     
     try {
-      const allChannels = await db
-        .select()
-        .from(channels)
-        .orderBy(channels.created_at);
+      // Optimize query with proper ordering and limit
+      const allChannels = await withTimeout(
+        db.select()
+          .from(channels)
+          .orderBy(sql`channels.created_at DESC`)
+          .limit(100)
+      );
       
       const duration = Date.now() - startTime;
-      console.log(`[API] Successfully fetched ${allChannels.length} channels in ${duration}ms`);
+      console.log(`[API] Successfully fetched ${allChannels.length} channels in ${duration}ms`, {
+        queryDuration: duration,
+        channelCount: allChannels.length,
+        timestamp: new Date().toISOString()
+      });
       
       res.json(allChannels);
     } catch (error) {
-      console.error('[API] Error fetching channels:', {
+      const errorDetails = {
         error: error instanceof Error ? error.message : 'Unknown error',
         stack: error instanceof Error ? error.stack : undefined,
-        timestamp: new Date().toISOString()
-      });
+        timestamp: new Date().toISOString(),
+        queryDuration: Date.now() - startTime
+      };
 
-      res.status(500).json({ 
+      console.error('[API] Error fetching channels:', errorDetails);
+
+      const statusCode = error instanceof Error && error.message.includes('timed out') 
+        ? 504 // Gateway Timeout
+        : 500; // Internal Server Error
+
+      res.status(statusCode).json({ 
         error: "Failed to fetch channels",
-        details: error instanceof Error ? error.message : 'Unknown error',
-        timestamp: new Date().toISOString()
+        details: errorDetails.error,
+        timestamp: errorDetails.timestamp
       });
     }
   });
@@ -117,6 +149,7 @@ export function registerRoutes(app: Express) {
   });
 
   app.get("/api/channels/:channelId/posts", async (req, res) => {
+    const startTime = Date.now();
     try {
       console.log(`[API] Fetching posts for channel: ${req.params.channelId}`);
       
@@ -129,12 +162,13 @@ export function registerRoutes(app: Express) {
         });
       }
 
-      // First check if channel exists
-      const [channel] = await db
-        .select()
-        .from(channels)
-        .where(eq(channels.id, channelId))
-        .limit(1);
+      // First check if channel exists using optimized query
+      const [channel] = await withTimeout(
+        db.select()
+          .from(channels)
+          .where(eq(channels.id, channelId))
+          .limit(1)
+      );
 
       if (!channel) {
         console.warn('[API] Channel not found:', channelId);
@@ -144,30 +178,43 @@ export function registerRoutes(app: Express) {
         });
       }
 
-      const channelPosts = await db
-        .select()
-        .from(posts)
-        .where(eq(posts.channel_id, channelId))
-        .orderBy(posts.created_at);
+      // Optimize posts query with proper ordering and limit
+      const channelPosts = await withTimeout(
+        db.select()
+          .from(posts)
+          .where(eq(posts.channel_id, channelId))
+          .orderBy(sql`posts.created_at DESC`)
+          .limit(50)
+      );
 
-      console.log(`[API] Successfully fetched ${channelPosts.length} posts for channel ${channelId}`, {
+      const duration = Date.now() - startTime;
+      console.log(`[API] Successfully fetched posts for channel ${channelId}`, {
         channelName: channel.name,
         postsCount: channelPosts.length,
+        queryDuration: duration,
         timestamp: new Date().toISOString()
       });
 
       res.json(channelPosts);
     } catch (error) {
-      console.error('[API] Error fetching channel posts:', {
+      const errorDetails = {
         error: error instanceof Error ? error.message : 'Unknown error',
         stack: error instanceof Error ? error.stack : undefined,
         channelId: req.params.channelId,
-        timestamp: new Date().toISOString()
-      });
-      res.status(500).json({ 
+        timestamp: new Date().toISOString(),
+        queryDuration: Date.now() - startTime
+      };
+
+      console.error('[API] Error fetching channel posts:', errorDetails);
+
+      const statusCode = error instanceof Error && error.message.includes('timed out')
+        ? 504 // Gateway Timeout
+        : 500; // Internal Server Error
+
+      res.status(statusCode).json({ 
         error: "Failed to fetch channel posts",
-        details: error instanceof Error ? error.message : 'Unknown error',
-        timestamp: new Date().toISOString()
+        details: errorDetails.error,
+        timestamp: errorDetails.timestamp
       });
     }
   });
