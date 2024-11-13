@@ -8,7 +8,7 @@ import path from "path";
 
 const storage = multer.diskStorage({
   destination: "uploads/",
-  filename: (req, file, cb) => {
+  filename: (req: Express.Request, file: Express.Multer.File, cb: (error: Error | null, filename: string) => void) => {
     const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1E9)}`;
     cb(null, `${uniqueSuffix}${path.extname(file.originalname)}`);
   }
@@ -24,20 +24,31 @@ export function registerRoutes(app: Express) {
 
   // Channel routes
   app.get("/api/channels", async (req, res) => {
+    const startTime = Date.now();
+    console.log('[API] Starting channels fetch request');
+    
     try {
-      console.log('[API] Fetching channels');
       const allChannels = await db
         .select()
         .from(channels)
         .orderBy(channels.created_at);
       
-      console.log(`[API] Successfully fetched ${allChannels.length} channels`);
+      const duration = Date.now() - startTime;
+      console.log(`[API] Successfully fetched ${allChannels.length} channels in ${duration}ms`);
+      
       res.json(allChannels);
     } catch (error) {
-      console.error('[API] Error fetching channels:', error);
+      console.error('[API] Error fetching channels:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        timestamp: new Date().toISOString()
+      });
+
+      // Send a more detailed error response
       res.status(500).json({ 
         error: "Failed to fetch channels",
-        details: error instanceof Error ? error.message : 'Unknown error'
+        details: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
       });
     }
   });
@@ -45,11 +56,18 @@ export function registerRoutes(app: Express) {
   app.post("/api/channels", async (req: any, res) => {
     if (!req.user) {
       console.warn('[API] Unauthorized attempt to create channel');
-      return res.status(401).json({ error: "Unauthorized" });
+      return res.status(401).json({ 
+        error: "Unauthorized",
+        details: "You must be logged in to create a channel"
+      });
     }
 
     try {
-      console.log('[API] Creating new channel:', req.body.name);
+      console.log('[API] Creating new channel:', {
+        name: req.body.name,
+        userId: req.user.id,
+        timestamp: new Date().toISOString()
+      });
       
       if (!req.body.name || !req.body.description) {
         return res.status(400).json({ 
@@ -67,10 +85,22 @@ export function registerRoutes(app: Express) {
         })
         .returning();
 
-      console.log('[API] Successfully created channel:', channel.id);
+      console.log('[API] Successfully created channel:', {
+        channelId: channel.id,
+        name: channel.name,
+        userId: req.user.id,
+        timestamp: new Date().toISOString()
+      });
+      
       res.json(channel);
     } catch (error) {
-      console.error('[API] Error creating channel:', error);
+      console.error('[API] Error creating channel:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        requestBody: req.body,
+        userId: req.user.id,
+        timestamp: new Date().toISOString()
+      });
       
       if (error instanceof Error && error.message.includes('unique constraint')) {
         return res.status(400).json({ 
@@ -81,7 +111,8 @@ export function registerRoutes(app: Express) {
 
       res.status(500).json({ 
         error: "Failed to create channel",
-        details: error instanceof Error ? error.message : 'Unknown error'
+        details: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
       });
     }
   });
@@ -121,10 +152,15 @@ export function registerRoutes(app: Express) {
       console.log(`[API] Successfully fetched ${channelPosts.length} posts for channel ${channelId}`);
       res.json(channelPosts);
     } catch (error) {
-      console.error('[API] Error fetching channel posts:', error);
+      console.error('[API] Error fetching channel posts:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        timestamp: new Date().toISOString()
+      });
       res.status(500).json({ 
         error: "Failed to fetch channel posts",
-        details: error instanceof Error ? error.message : 'Unknown error'
+        details: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
       });
     }
   });
@@ -135,7 +171,16 @@ export function registerRoutes(app: Express) {
       const allPosts = await db.select().from(posts).orderBy(posts.created_at);
       res.json(allPosts);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch posts" });
+      console.error('[API] Error fetching posts:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        timestamp: new Date().toISOString()
+      });
+      res.status(500).json({ 
+        error: "Failed to fetch posts",
+        details: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
+      });
     }
   });
 
@@ -149,7 +194,17 @@ export function registerRoutes(app: Express) {
         .orderBy(posts.created_at);
       res.json(userPosts);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch user posts" });
+      console.error('[API] Error fetching user posts:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        userId: req.params.userId,
+        timestamp: new Date().toISOString()
+      });
+      res.status(500).json({ 
+        error: "Failed to fetch user posts",
+        details: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
+      });
     }
   });
 
@@ -175,7 +230,17 @@ export function registerRoutes(app: Express) {
 
       res.json(post);
     } catch (error) {
-      res.status(500).json({ error: "Failed to create post" });
+      console.error('[API] Error creating post:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        userId: req.user.id,
+        timestamp: new Date().toISOString()
+      });
+      res.status(500).json({ 
+        error: "Failed to create post",
+        details: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
+      });
     }
   });
 
@@ -212,6 +277,13 @@ export function registerRoutes(app: Express) {
 
       res.json({ success: true });
     } catch (error) {
+      console.error('[API] Error updating like:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        userId: req.user.id,
+        postId: req.params.postId,
+        timestamp: new Date().toISOString()
+      });
       res.status(500).json({ error: "Failed to update like" });
     }
   });
