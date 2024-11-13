@@ -25,19 +25,39 @@ export function registerRoutes(app: Express) {
   // Channel routes
   app.get("/api/channels", async (req, res) => {
     try {
-      const allChannels = await db.select().from(channels).orderBy(channels.createdAt);
+      console.log('[API] Fetching channels');
+      const allChannels = await db
+        .select()
+        .from(channels)
+        .orderBy(channels.createdAt);
+      
+      console.log(`[API] Successfully fetched ${allChannels.length} channels`);
       res.json(allChannels);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch channels" });
+      console.error('[API] Error fetching channels:', error);
+      res.status(500).json({ 
+        error: "Failed to fetch channels",
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
     }
   });
 
   app.post("/api/channels", async (req: any, res) => {
     if (!req.user) {
+      console.warn('[API] Unauthorized attempt to create channel');
       return res.status(401).json({ error: "Unauthorized" });
     }
 
     try {
+      console.log('[API] Creating new channel:', req.body.name);
+      
+      if (!req.body.name || !req.body.description) {
+        return res.status(400).json({ 
+          error: "Missing required fields",
+          details: "Name and description are required"
+        });
+      }
+
       const [channel] = await db
         .insert(channels)
         .values({
@@ -47,22 +67,66 @@ export function registerRoutes(app: Express) {
         })
         .returning();
 
+      console.log('[API] Successfully created channel:', channel.id);
       res.json(channel);
     } catch (error) {
-      res.status(500).json({ error: "Failed to create channel" });
+      console.error('[API] Error creating channel:', error);
+      
+      // Check for unique constraint violation
+      if (error instanceof Error && error.message.includes('unique constraint')) {
+        return res.status(400).json({ 
+          error: "Channel name already exists",
+          details: "Please choose a different name"
+        });
+      }
+
+      res.status(500).json({ 
+        error: "Failed to create channel",
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
     }
   });
 
   app.get("/api/channels/:channelId/posts", async (req, res) => {
     try {
+      console.log(`[API] Fetching posts for channel: ${req.params.channelId}`);
+      
+      const channelId = parseInt(req.params.channelId);
+      if (isNaN(channelId)) {
+        return res.status(400).json({ 
+          error: "Invalid channel ID",
+          details: "Channel ID must be a number"
+        });
+      }
+
+      // First check if channel exists
+      const [channel] = await db
+        .select()
+        .from(channels)
+        .where(eq(channels.id, channelId))
+        .limit(1);
+
+      if (!channel) {
+        return res.status(404).json({ 
+          error: "Channel not found",
+          details: "The requested channel does not exist"
+        });
+      }
+
       const channelPosts = await db
         .select()
         .from(posts)
-        .where(eq(posts.channelId, parseInt(req.params.channelId)))
+        .where(eq(posts.channelId, channelId))
         .orderBy(posts.createdAt);
+
+      console.log(`[API] Successfully fetched ${channelPosts.length} posts for channel ${channelId}`);
       res.json(channelPosts);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch channel posts" });
+      console.error('[API] Error fetching channel posts:', error);
+      res.status(500).json({ 
+        error: "Failed to fetch channel posts",
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
     }
   });
 

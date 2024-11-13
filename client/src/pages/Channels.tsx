@@ -16,19 +16,21 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { useToast } from '@/hooks/use-toast';
-import { Plus } from 'lucide-react';
+import { Plus, Loader2 } from 'lucide-react';
 
 export function Channels() {
   const { user } = useUser();
-  const { data: channels } = useSWR<Channel[]>('/api/channels');
+  const { data: channels, error: channelsError, isLoading: isChannelsLoading } = useSWR<Channel[]>('/api/channels');
   const [selectedChannel, setSelectedChannel] = useState<number | null>(null);
-  const { data: channelPosts } = useSWR<Post[]>(
+  const { data: channelPosts, error: postsError, isLoading: isPostsLoading } = useSWR<Post[]>(
     selectedChannel ? `/api/channels/${selectedChannel}/posts` : null
   );
   const { toast } = useToast();
+  const [isCreating, setIsCreating] = useState(false);
 
   const createChannel = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setIsCreating(true);
     const formData = new FormData(event.currentTarget);
     const name = formData.get('name') as string;
     const description = formData.get('description') as string;
@@ -43,7 +45,8 @@ export function Channels() {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to create channel');
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to create channel');
       }
 
       toast({
@@ -52,16 +55,28 @@ export function Channels() {
       });
 
       mutate('/api/channels');
+      setIsCreating(false);
     } catch (error) {
       toast({
         title: 'Error',
-        description: 'Failed to create channel',
+        description: error instanceof Error ? error.message : 'Failed to create channel',
         variant: 'destructive',
       });
+      setIsCreating(false);
     }
   };
 
-  if (!channels) return <div>Loading...</div>;
+  if (channelsError) {
+    return (
+      <Layout>
+        <div className="max-w-6xl mx-auto p-4">
+          <div className="text-center text-destructive">
+            Error loading channels: {channelsError.message}
+          </div>
+        </div>
+      </Layout>
+    );
+  }
 
   return (
     <Layout>
@@ -95,8 +110,15 @@ export function Channels() {
                       required
                     />
                   </div>
-                  <Button type="submit" className="w-full">
-                    Create Channel
+                  <Button type="submit" className="w-full" disabled={isCreating}>
+                    {isCreating ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      'Create Channel'
+                    )}
                   </Button>
                 </form>
               </DialogContent>
@@ -106,38 +128,52 @@ export function Channels() {
 
         <div className="grid md:grid-cols-[300px,1fr] gap-6">
           <div className="space-y-4">
-            {channels.map((channel) => (
-              <Card
-                key={channel.id}
-                className={`p-4 cursor-pointer transition-colors ${
-                  selectedChannel === channel.id ? 'bg-accent' : ''
-                }`}
-                onClick={() => setSelectedChannel(channel.id)}
-              >
-                <h3 className="font-semibold">{channel.name}</h3>
-                <p className="text-sm text-muted-foreground">
-                  {channel.description}
-                </p>
-              </Card>
-            ))}
+            {isChannelsLoading ? (
+              <div className="flex items-center justify-center p-4">
+                <Loader2 className="h-6 w-6 animate-spin" />
+              </div>
+            ) : channels?.length ? (
+              channels.map((channel) => (
+                <Card
+                  key={channel.id}
+                  className={`p-4 cursor-pointer transition-colors ${
+                    selectedChannel === channel.id ? 'bg-accent' : ''
+                  }`}
+                  onClick={() => setSelectedChannel(channel.id)}
+                >
+                  <h3 className="font-semibold">{channel.name}</h3>
+                  <p className="text-sm text-muted-foreground">
+                    {channel.description}
+                  </p>
+                </Card>
+              ))
+            ) : (
+              <p className="text-center text-muted-foreground p-4">
+                No channels available
+              </p>
+            )}
           </div>
 
           <div className="space-y-4">
             {selectedChannel ? (
-              channelPosts ? (
-                channelPosts.length > 0 ? (
-                  channelPosts.map((post) => (
-                    <Card key={post.id} className="p-4">
-                      <VoicePost post={post} />
-                    </Card>
-                  ))
-                ) : (
-                  <p className="text-center text-muted-foreground">
-                    No posts in this channel yet
-                  </p>
-                )
+              isPostsLoading ? (
+                <div className="flex items-center justify-center p-4">
+                  <Loader2 className="h-6 w-6 animate-spin" />
+                </div>
+              ) : postsError ? (
+                <div className="text-center text-destructive">
+                  Error loading posts: {postsError.message}
+                </div>
+              ) : channelPosts?.length ? (
+                channelPosts.map((post) => (
+                  <Card key={post.id} className="p-4">
+                    <VoicePost post={post} />
+                  </Card>
+                ))
               ) : (
-                <div>Loading posts...</div>
+                <p className="text-center text-muted-foreground">
+                  No posts in this channel yet
+                </p>
               )
             ) : (
               <p className="text-center text-muted-foreground">
