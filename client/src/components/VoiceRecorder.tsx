@@ -48,7 +48,6 @@ export function VoiceRecorder() {
 
     try {
       console.log('Starting audio processing');
-      // Convert blob to AudioBuffer for effects processing
       const arrayBuffer = await audioBlob.arrayBuffer();
       console.log('Audio blob converted to array buffer:', {
         size: arrayBuffer.byteLength,
@@ -97,7 +96,7 @@ export function VoiceRecorder() {
       formData.append('audio', processedBlob, 'audio.wav');
       formData.append('duration', duration.toString());
       if (selectedChannel) {
-        formData.append('channelId', selectedChannel);
+        formData.append('channel_id', selectedChannel);
       }
 
       console.log('Uploading processed audio');
@@ -119,6 +118,7 @@ export function VoiceRecorder() {
         description: 'Your voice note has been posted!',
       });
 
+      // Refresh both the main feed and channel feed if posting to a channel
       mutate('/api/posts');
       if (selectedChannel) {
         mutate(`/api/channels/${selectedChannel}/posts`);

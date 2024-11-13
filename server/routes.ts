@@ -5,10 +5,12 @@ import { db } from "db";
 import { posts, channels } from "db/schema";
 import { eq } from "drizzle-orm";
 import path from "path";
+import type { Express as ExpressType } from 'express';
+import type { Multer } from 'multer';
 
 const storage = multer.diskStorage({
   destination: "uploads/",
-  filename: (req: Express.Request, file: Express.Multer.File, cb: (error: Error | null, filename: string) => void) => {
+  filename: (_req: ExpressType.Request, file: Multer.File, cb: (error: Error | null, filename: string) => void) => {
     const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1E9)}`;
     cb(null, `${uniqueSuffix}${path.extname(file.originalname)}`);
   }
@@ -23,7 +25,7 @@ export function registerRoutes(app: Express) {
   app.use('/uploads', express.static('uploads'));
 
   // Channel routes
-  app.get("/api/channels", async (req, res) => {
+  app.get("/api/channels", async (_req, res) => {
     const startTime = Date.now();
     console.log('[API] Starting channels fetch request');
     
@@ -44,7 +46,6 @@ export function registerRoutes(app: Express) {
         timestamp: new Date().toISOString()
       });
 
-      // Send a more detailed error response
       res.status(500).json({ 
         error: "Failed to fetch channels",
         details: error instanceof Error ? error.message : 'Unknown error',
@@ -166,7 +167,7 @@ export function registerRoutes(app: Express) {
   });
 
   // Get all posts
-  app.get("/api/posts", async (req, res) => {
+  app.get("/api/posts", async (_req, res) => {
     try {
       const allPosts = await db.select().from(posts).orderBy(posts.created_at);
       res.json(allPosts);

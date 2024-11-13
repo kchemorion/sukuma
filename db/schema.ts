@@ -13,17 +13,17 @@ export const channels = pgTable("channels", {
   name: text("name").unique().notNull(),
   description: text("description").notNull(),
   created_at: timestamp("created_at").defaultNow().notNull(),
-  created_by: integer().notNull().references(() => users.id),
+  created_by: integer("created_by").notNull().references(() => users.id),
 });
 
 export const posts = pgTable("posts", {
   id: integer().primaryKey().generatedAlwaysAsIdentity(),
-  userId: integer().notNull().references(() => users.id),
+  user_id: integer("user_id").notNull().references(() => users.id),
   username: text("username").notNull(),
-  audioUrl: text("audio_url").notNull(),
+  audio_url: text("audio_url").notNull(),
   duration: integer("duration").notNull(),
   transcript: text("transcript"),
-  channelId: integer().references(() => channels.id),
+  channel_id: integer("channel_id").references(() => channels.id),
   likes: integer("likes").array(),
   replies: integer("replies").array(),
   created_at: timestamp("created_at").defaultNow().notNull(),
