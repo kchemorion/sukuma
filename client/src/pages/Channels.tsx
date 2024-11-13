@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Layout } from '@/components/Layout';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -37,22 +37,41 @@ export function Channels() {
   const [isCreating, setIsCreating] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<number | null>(null);
   const [fetchState, setFetchState] = useState<FetchState>({
-    isLoading: true,
+    isLoading: false,
     error: null,
     retryCount: 0,
   });
+  
+  // Use refs to track mounted state and active requests
+  const isMounted = useRef(true);
+  const activeRequests = useRef(new Set<AbortController>());
 
-  // Fetch channels with improved error handling and retry mechanism
+  // Cleanup function for component unmount
+  useEffect(() => {
+    return () => {
+      isMounted.current = false;
+      // Cancel all active requests
+      activeRequests.current.forEach(controller => controller.abort());
+      activeRequests.current.clear();
+    };
+  }, []);
+
+  // Safe state update function
+  const safeSetFetchState = useCallback((updater: (prev: FetchState) => FetchState) => {
+    if (isMounted.current) {
+      setFetchState(updater);
+    }
+  }, []);
+
   const fetchWithRetry = useCallback(async (url: string, attempt: number = 0): Promise<any> => {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+    activeRequests.current.add(controller);
 
     try {
       console.log(`[Channels] Fetching data from ${url} (attempt ${attempt + 1}/${RETRY_COUNT})`);
-      setFetchState(prev => ({
+      safeSetFetchState(prev => ({
         ...prev,
         isLoading: true,
-        error: null,
       }));
 
       const response = await fetch(url, { signal: controller.signal });
@@ -67,8 +86,8 @@ export function Channels() {
         timestamp: new Date().toISOString(),
       });
 
-      setFetchState(prev => ({
-        ...prev,
+      // Reset state on successful fetch
+      safeSetFetchState(prev => ({
         isLoading: false,
         error: null,
         retryCount: 0,
@@ -78,6 +97,8 @@ export function Channels() {
     } catch (error) {
       console.error(`[Channels] Error fetching from ${url}:`, error);
       
+      if (!isMounted.current) return null;
+
       if (error instanceof Error && error.name === 'AbortError') {
         throw new Error(`Request timeout after ${FETCH_TIMEOUT}ms`);
       }
@@ -86,17 +107,16 @@ export function Channels() {
         const delay = RETRY_DELAY * Math.pow(2, attempt);
         console.log(`[Channels] Retrying in ${delay}ms...`);
         
-        setFetchState(prev => ({
+        safeSetFetchState(prev => ({
           ...prev,
-          retryCount: attempt + 1,
+          retryCount: prev.retryCount + 1,
         }));
 
         await new Promise(resolve => setTimeout(resolve, delay));
         return fetchWithRetry(url, attempt + 1);
       }
 
-      setFetchState(prev => ({
-        ...prev,
+      safeSetFetchState(prev => ({
         isLoading: false,
         error: error instanceof Error ? error : new Error('Unknown error occurred'),
         retryCount: attempt + 1,
@@ -104,9 +124,9 @@ export function Channels() {
 
       throw error;
     } finally {
-      clearTimeout(timeoutId);
+      activeRequests.current.delete(controller);
     }
-  }, []);
+  }, [safeSetFetchState]);
 
   const { data: channels, error: channelsError } = useSWR<Channel[]>(
     '/api/channels',
@@ -163,7 +183,6 @@ export function Channels() {
         throw new Error(error.error || 'Failed to create channel');
       }
 
-      console.log('[Channels] Channel created successfully');
       toast({
         title: 'Success',
         description: 'Channel created successfully',
@@ -184,19 +203,21 @@ export function Channels() {
     }
   };
 
-  // Render loading state
-  if (fetchState.isLoading && !channels) {
+  // Updated loading state condition
+  if (!channels && fetchState.isLoading) {
     return (
       <Layout>
-        <div className="max-w-6xl mx-auto p-4">
-          <div className="flex flex-col items-center justify-center p-8 space-y-4">
-            <Loader2 className="h-8 w-8 animate-spin" />
-            <p className="text-sm text-muted-foreground">
-              Loading channels...
-              {fetchState.retryCount > 0 && ` (Retry ${fetchState.retryCount}/${RETRY_COUNT})`}
-            </p>
+        <ErrorBoundary>
+          <div className="max-w-6xl mx-auto p-4">
+            <div className="flex flex-col items-center justify-center p-8 space-y-4">
+              <Loader2 className="h-8 w-8 animate-spin" />
+              <p className="text-sm text-muted-foreground">
+                Loading channels...
+                {fetchState.retryCount > 0 && ` (Retry ${fetchState.retryCount}/${RETRY_COUNT})`}
+              </p>
+            </div>
           </div>
-        </div>
+        </ErrorBoundary>
       </Layout>
     );
   }
@@ -206,28 +227,42 @@ export function Channels() {
     const error = channelsError || fetchState.error;
     return (
       <Layout>
-        <div className="max-w-6xl mx-auto p-4">
-          <Alert variant="destructive">
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription>
-              Error loading channels: {error?.message}
-              {fetchState.retryCount > 0 && ` (Retry attempt ${fetchState.retryCount}/${RETRY_COUNT})`}
-            </AlertDescription>
-          </Alert>
-          <Button 
-            className="mt-4"
-            onClick={() => mutate('/api/channels')}
-          >
-            Retry
-          </Button>
-        </div>
+        <ErrorBoundary>
+          <div className="max-w-6xl mx-auto p-4">
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                Error loading channels: {error?.message}
+                {fetchState.retryCount > 0 && ` (Retry attempt ${fetchState.retryCount}/${RETRY_COUNT})`}
+              </AlertDescription>
+            </Alert>
+            <Button 
+              className="mt-4"
+              onClick={() => mutate('/api/channels')}
+            >
+              Retry
+            </Button>
+          </div>
+        </ErrorBoundary>
       </Layout>
     );
   }
 
   return (
     <Layout>
-      <ErrorBoundary>
+      <ErrorBoundary
+        fallback={
+          <div className="max-w-6xl mx-auto p-4">
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                Something went wrong while rendering the channels page.
+                Please try refreshing the page.
+              </AlertDescription>
+            </Alert>
+          </div>
+        }
+      >
         <div className="max-w-6xl mx-auto p-4">
           <div className="flex justify-between items-center mb-6">
             <h1 className="text-2xl font-bold">Voice Channels</h1>
