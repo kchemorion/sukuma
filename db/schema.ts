@@ -12,8 +12,8 @@ export const channels = pgTable("channels", {
   id: integer().primaryKey().generatedAlwaysAsIdentity(),
   name: text("name").unique().notNull(),
   description: text("description").notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  createdBy: integer().notNull().references(() => users.id),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+  created_by: integer().notNull().references(() => users.id),
 });
 
 export const posts = pgTable("posts", {
@@ -26,7 +26,7 @@ export const posts = pgTable("posts", {
   channelId: integer().references(() => channels.id),
   likes: integer("likes").array(),
   replies: integer("replies").array(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
+  created_at: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const insertUserSchema = createInsertSchema(users);

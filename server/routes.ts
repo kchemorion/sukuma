@@ -29,7 +29,7 @@ export function registerRoutes(app: Express) {
       const allChannels = await db
         .select()
         .from(channels)
-        .orderBy(channels.createdAt);
+        .orderBy(channels.created_at);
       
       console.log(`[API] Successfully fetched ${allChannels.length} channels`);
       res.json(allChannels);
@@ -63,7 +63,7 @@ export function registerRoutes(app: Express) {
         .values({
           name: req.body.name,
           description: req.body.description,
-          createdBy: req.user.id,
+          created_by: req.user.id,
         })
         .returning();
 
@@ -72,7 +72,6 @@ export function registerRoutes(app: Express) {
     } catch (error) {
       console.error('[API] Error creating channel:', error);
       
-      // Check for unique constraint violation
       if (error instanceof Error && error.message.includes('unique constraint')) {
         return res.status(400).json({ 
           error: "Channel name already exists",
@@ -116,8 +115,8 @@ export function registerRoutes(app: Express) {
       const channelPosts = await db
         .select()
         .from(posts)
-        .where(eq(posts.channelId, channelId))
-        .orderBy(posts.createdAt);
+        .where(eq(posts.channel_id, channelId))
+        .orderBy(posts.created_at);
 
       console.log(`[API] Successfully fetched ${channelPosts.length} posts for channel ${channelId}`);
       res.json(channelPosts);
@@ -133,7 +132,7 @@ export function registerRoutes(app: Express) {
   // Get all posts
   app.get("/api/posts", async (req, res) => {
     try {
-      const allPosts = await db.select().from(posts).orderBy(posts.createdAt);
+      const allPosts = await db.select().from(posts).orderBy(posts.created_at);
       res.json(allPosts);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch posts" });
@@ -146,8 +145,8 @@ export function registerRoutes(app: Express) {
       const userPosts = await db
         .select()
         .from(posts)
-        .where(eq(posts.userId, parseInt(req.params.userId)))
-        .orderBy(posts.createdAt);
+        .where(eq(posts.user_id, parseInt(req.params.userId)))
+        .orderBy(posts.created_at);
       res.json(userPosts);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch user posts" });
@@ -164,11 +163,11 @@ export function registerRoutes(app: Express) {
       const [post] = await db
         .insert(posts)
         .values({
-          userId: req.user.id,
+          user_id: req.user.id,
           username: req.user.username,
-          audioUrl: `/uploads/${req.file.filename}`,
+          audio_url: `/uploads/${req.file.filename}`,
           duration: parseInt(req.body.duration),
-          channelId: req.body.channelId ? parseInt(req.body.channelId) : null,
+          channel_id: req.body.channelId ? parseInt(req.body.channelId) : null,
           likes: [],
           replies: [],
         })
