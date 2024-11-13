@@ -1,0 +1,66 @@
+    1. Overall Concept: Sukuma Wiki (named after a popular East African kale dish, meaning "push the week" in Swahili) is a voice-centric social media platform. Users share thoughts, stories, and ideas through voice notes instead of text posts. 
+    2. User Interface: a. Header: 
+        ◦ The app logo (a green leaf) is displayed alongside the app name. 
+        ◦ A user profile icon is in the top-right corner, which expands to show user details when clicked. 
+       b. Navigation: 
+        ◦ The app has four main sections: Feed, Trending, Challenges, and Channels. 
+       c. Main Content Area: 
+        ◦ This changes based on the selected navigation item. 
+       d. New Post Button: 
+        ◦ A floating action button in the bottom-right corner for creating new voice posts. 
+    3. Key Features: a. Voice Feed: 
+        ◦ The main feed displays voice posts from various users. 
+        ◦ Each post shows: 
+            ▪ User avatar and username 
+            ▪ Timestamp 
+            ▪ A leaf visualization that grows based on the post's popularity 
+            ▪ Audio player for the voice note 
+            ▪ Transcript of the voice note (if available) 
+            ▪ Reaction buttons (emojis) 
+            ▪ Reply button 
+       b. Voice Replies: 
+        ◦ Users can reply to posts with their own voice notes. 
+       c. Auto-play: 
+        ◦ Voice notes play automatically one after another. 
+       d. Trending Topics: 
+        ◦ Shows popular topics being discussed on the platform. 
+       e. Voice Challenges: 
+        ◦ Time-limited challenges to encourage user engagement and creativity. 
+       f. Voice Channels: 
+        ◦ Themed channels for specific topics or communities. 
+       g. Sukuma Points: 
+        ◦ A gamification system where users earn points for participation. 
+       h. Voice Effects: 
+        ◦ Options to apply effects like pitch shift, echo, or reverb to voice recordings. 
+    4. Technical Implementation: a. Frontend Framework: 
+        ◦ Uses Vue.js for reactive UI components. 
+       b. Styling: 
+        ◦ Utilizes Tailwind CSS for responsive design. 
+       c. Audio Recording: 
+        ◦ Implements the Web Audio API for recording voice notes. 
+       d. State Management: 
+        ◦ Currently manages state within the Vue instance, but could be expanded to use Vuex for more complex state management. 
+    5. Key Components: a. User Profile: 
+        ◦ Displays user avatar, username, ID, and Sukuma Points. 
+       b. Voice Post: 
+        ◦ Contains audio playback, user info, reactions, and reply functionality. 
+       c. New Post Interface: 
+        ◦ Allows recording, applying effects, and posting new voice notes. 
+       d. Navigation Menu: 
+        ◦ Switches between different views of the app. 
+    6. Planned Features (not yet implemented): a. Voice-to-Text: 
+        ◦ Automatic transcription of voice notes for accessibility and searchability. 
+       b. AI Moderation: 
+        ◦ To ensure community safety and content quality. 
+       c. Collaborative Stories: 
+        ◦ Allowing users to chain their voice notes into narratives. 
+       d. Private Messaging: 
+        ◦ A "whisper mode" for private voice messages. 
+    7. Data Flow: 
+        ◦ The app is currently using mock data, but it's structured to easily integrate with a backend API. 
+        ◦ Actions like posting, reacting, and joining channels are logged but not persisted. 
+    8. User Experience: 
+        ◦ The design emphasizes ease of recording and listening to voice content. 
+        ◦ The leaf visualization provides a unique, organic way to represent post popularity. 
+        ◦ The layout is mobile-friendly, catering to on-the-go usage. 
+This app aims to create a unique social media experience centered around voice, fostering a more personal and expressive form of online interaction. It combines elements of traditional social media with innovative voice-based features, creating a platform that's both familiar and novel to users.
