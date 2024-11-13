@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button';
-import { Mic, Square, Loader2 } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Mic, Square, Loader2, Search } from 'lucide-react';
 import { useAudioRecorder } from '../hooks/use-audio-recorder';
 import { useAudioEffects } from '../hooks/use-audio-effects';
 import { VoiceEffectSelector } from './VoiceEffectSelector';
@@ -20,7 +21,18 @@ import {
 } from "@/components/ui/select";
 import type { Channel } from 'db/schema';
 import useSWR from 'swr';
-import { useState } from 'react';
+import { useState, useCallback, useEffect } from 'react';
+
+// Simple fuzzy search implementation
+function fuzzySearch(items: Channel[], query: string): Channel[] {
+  const lowercaseQuery = query.toLowerCase();
+  return items.filter(item => {
+    const lowercaseName = item.name.toLowerCase();
+    const lowercaseDesc = item.description.toLowerCase();
+    return lowercaseName.includes(lowercaseQuery) || 
+           lowercaseDesc.includes(lowercaseQuery);
+  });
+}
 
 export function VoiceRecorder() {
   const { toast } = useToast();
@@ -35,8 +47,21 @@ export function VoiceRecorder() {
   } = useAudioRecorder();
   
   const { currentEffect, setCurrentEffect, applyEffect } = useAudioEffects();
-  const { data: channels } = useSWR<Channel[]>('/api/channels');
+  const { data: channels, isLoading: isLoadingChannels } = useSWR<Channel[]>('/api/channels');
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filteredChannels, setFilteredChannels] = useState<Channel[]>([]);
+
+  // Update filtered channels when search query changes or channels data updates
+  useEffect(() => {
+    if (channels) {
+      setFilteredChannels(searchQuery ? fuzzySearch(channels, searchQuery) : channels);
+    }
+  }, [searchQuery, channels]);
+
+  const handleSearch = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchQuery(event.target.value);
+  }, []);
 
   const handleUpload = async () => {
     if (!audioBlob) {
@@ -193,7 +218,7 @@ export function VoiceRecorder() {
       <DialogHeader>
         <DialogTitle>Record Voice Note</DialogTitle>
         <DialogDescription>
-          Record your voice note and add effects before posting
+          Record your voice note, add effects, and optionally select a channel to post to
         </DialogDescription>
       </DialogHeader>
       
@@ -203,28 +228,59 @@ export function VoiceRecorder() {
           onEffectChange={setCurrentEffect}
         />
         
-        {channels && (
-          <Select value={selectedChannel ?? undefined} onValueChange={setSelectedChannel}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select a channel (optional)" />
-            </SelectTrigger>
-            <SelectContent>
-              {channels.map((channel) => (
-                <SelectItem key={channel.id} value={channel.id.toString()}>
-                  {channel.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
+        <div className="space-y-2">
+          <div className="relative">
+            <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search channels..."
+              value={searchQuery}
+              onChange={handleSearch}
+              className="pl-8"
+              aria-label="Search channels"
+            />
+          </div>
+          
+          {isLoadingChannels ? (
+            <div className="flex items-center justify-center p-2">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span className="ml-2 text-sm text-muted-foreground">Loading channels...</span>
+            </div>
+          ) : (
+            <Select
+              value={selectedChannel ?? undefined}
+              onValueChange={setSelectedChannel}
+              disabled={isLoadingChannels}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select a channel (optional)" />
+              </SelectTrigger>
+              <SelectContent>
+                {filteredChannels.map((channel) => (
+                  <SelectItem
+                    key={channel.id}
+                    value={channel.id.toString()}
+                  >
+                    {channel.name}
+                  </SelectItem>
+                ))}
+                {filteredChannels.length === 0 && (
+                  <div className="p-2 text-sm text-muted-foreground text-center">
+                    No channels found
+                  </div>
+                )}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
 
-        <div className="flex justify-center">
+        <div className="flex justify-center" role="region" aria-label="Voice recording controls">
           <Button
             size="lg"
             variant={isRecording ? 'destructive' : 'default'}
             className="rounded-full w-16 h-16"
             onClick={isRecording ? stopRecording : startRecording}
             aria-label={isRecording ? "Stop Recording" : "Start Recording"}
+            aria-pressed={isRecording}
           >
             {isRecording ? (
               <Square className="h-6 w-6" />
@@ -235,7 +291,7 @@ export function VoiceRecorder() {
         </div>
 
         {duration > 0 && (
-          <p className="text-center" aria-live="polite">
+          <p className="text-center" aria-live="polite" role="status">
             Recording duration: {Math.floor(duration)}s
           </p>
         )}

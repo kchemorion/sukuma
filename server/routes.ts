@@ -5,12 +5,10 @@ import { db } from "db";
 import { posts, channels } from "db/schema";
 import { eq } from "drizzle-orm";
 import path from "path";
-import type { Express as ExpressType } from 'express';
-import type { Multer } from 'multer';
 
 const storage = multer.diskStorage({
   destination: "uploads/",
-  filename: (_req: ExpressType.Request, file: Multer.File, cb: (error: Error | null, filename: string) => void) => {
+  filename: (req, file, cb) => {
     const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1E9)}`;
     cb(null, `${uniqueSuffix}${path.extname(file.originalname)}`);
   }
@@ -124,6 +122,7 @@ export function registerRoutes(app: Express) {
       
       const channelId = parseInt(req.params.channelId);
       if (isNaN(channelId)) {
+        console.warn('[API] Invalid channel ID provided:', req.params.channelId);
         return res.status(400).json({ 
           error: "Invalid channel ID",
           details: "Channel ID must be a number"
@@ -138,6 +137,7 @@ export function registerRoutes(app: Express) {
         .limit(1);
 
       if (!channel) {
+        console.warn('[API] Channel not found:', channelId);
         return res.status(404).json({ 
           error: "Channel not found",
           details: "The requested channel does not exist"
@@ -150,12 +150,18 @@ export function registerRoutes(app: Express) {
         .where(eq(posts.channel_id, channelId))
         .orderBy(posts.created_at);
 
-      console.log(`[API] Successfully fetched ${channelPosts.length} posts for channel ${channelId}`);
+      console.log(`[API] Successfully fetched ${channelPosts.length} posts for channel ${channelId}`, {
+        channelName: channel.name,
+        postsCount: channelPosts.length,
+        timestamp: new Date().toISOString()
+      });
+
       res.json(channelPosts);
     } catch (error) {
       console.error('[API] Error fetching channel posts:', {
         error: error instanceof Error ? error.message : 'Unknown error',
         stack: error instanceof Error ? error.stack : undefined,
+        channelId: req.params.channelId,
         timestamp: new Date().toISOString()
       });
       res.status(500).json({ 
@@ -166,56 +172,44 @@ export function registerRoutes(app: Express) {
     }
   });
 
-  // Get all posts
-  app.get("/api/posts", async (_req, res) => {
-    try {
-      const allPosts = await db.select().from(posts).orderBy(posts.created_at);
-      res.json(allPosts);
-    } catch (error) {
-      console.error('[API] Error fetching posts:', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        timestamp: new Date().toISOString()
-      });
-      res.status(500).json({ 
-        error: "Failed to fetch posts",
-        details: error instanceof Error ? error.message : 'Unknown error',
-        timestamp: new Date().toISOString()
-      });
-    }
-  });
-
-  // Get user's posts
-  app.get("/api/posts/user/:userId", async (req, res) => {
-    try {
-      const userPosts = await db
-        .select()
-        .from(posts)
-        .where(eq(posts.user_id, parseInt(req.params.userId)))
-        .orderBy(posts.created_at);
-      res.json(userPosts);
-    } catch (error) {
-      console.error('[API] Error fetching user posts:', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        userId: req.params.userId,
-        timestamp: new Date().toISOString()
-      });
-      res.status(500).json({ 
-        error: "Failed to fetch user posts",
-        details: error instanceof Error ? error.message : 'Unknown error',
-        timestamp: new Date().toISOString()
-      });
-    }
-  });
-
-  // Create new post
+  // Create new post with improved channel handling
   app.post("/api/posts", upload.single('audio'), async (req: any, res) => {
     if (!req.user || !req.file) {
-      return res.status(400).json({ error: "Missing user or audio file" });
+      console.warn('[API] Missing user or audio file in post creation');
+      return res.status(400).json({ 
+        error: "Missing user or audio file",
+        details: "Both user authentication and audio file are required"
+      });
     }
 
     try {
+      const channelId = req.body.channel_id ? parseInt(req.body.channel_id) : null;
+      
+      console.log('[API] Creating new post:', {
+        userId: req.user.id,
+        username: req.user.username,
+        channelId,
+        fileName: req.file.filename,
+        timestamp: new Date().toISOString()
+      });
+
+      // Verify channel exists if channelId is provided
+      if (channelId) {
+        const [channel] = await db
+          .select()
+          .from(channels)
+          .where(eq(channels.id, channelId))
+          .limit(1);
+
+        if (!channel) {
+          console.warn('[API] Attempted to post to non-existent channel:', channelId);
+          return res.status(400).json({
+            error: "Invalid channel",
+            details: "The specified channel does not exist"
+          });
+        }
+      }
+
       const [post] = await db
         .insert(posts)
         .values({
@@ -223,11 +217,18 @@ export function registerRoutes(app: Express) {
           username: req.user.username,
           audio_url: `/uploads/${req.file.filename}`,
           duration: parseInt(req.body.duration),
-          channel_id: req.body.channelId ? parseInt(req.body.channelId) : null,
+          channel_id: channelId,
           likes: [],
           replies: [],
         })
         .returning();
+
+      console.log('[API] Successfully created post:', {
+        postId: post.id,
+        channelId: post.channel_id,
+        userId: post.user_id,
+        timestamp: new Date().toISOString()
+      });
 
       res.json(post);
     } catch (error) {
@@ -235,6 +236,7 @@ export function registerRoutes(app: Express) {
         error: error instanceof Error ? error.message : 'Unknown error',
         stack: error instanceof Error ? error.stack : undefined,
         userId: req.user.id,
+        channelId: req.body.channel_id,
         timestamp: new Date().toISOString()
       });
       res.status(500).json({ 
