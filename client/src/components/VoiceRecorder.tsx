@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogContent,
 } from "@/components/ui/dialog";
 
 export function VoiceRecorder() {
@@ -19,49 +20,84 @@ export function VoiceRecorder() {
     stopRecording,
     audioBlob,
     duration,
-    isUploading
+    isUploading,
+    setIsUploading
   } = useAudioRecorder();
   
   const { currentEffect, setCurrentEffect, applyEffect } = useAudioEffects();
 
   const handleUpload = async () => {
-    if (!audioBlob) return;
+    if (!audioBlob) {
+      console.error('No audio blob available');
+      return;
+    }
+
+    setIsUploading(true);
 
     try {
+      console.log('Starting audio processing');
       // Convert blob to AudioBuffer for effects processing
       const arrayBuffer = await audioBlob.arrayBuffer();
+      console.log('Audio blob converted to array buffer:', {
+        size: arrayBuffer.byteLength,
+        type: audioBlob.type
+      });
+
       const audioContext = new AudioContext();
       const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      console.log('Audio decoded:', {
+        duration: audioBuffer.duration,
+        numberOfChannels: audioBuffer.numberOfChannels,
+        sampleRate: audioBuffer.sampleRate
+      });
       
       // Apply selected effect
+      console.log('Applying effect:', currentEffect);
       const processedBuffer = await applyEffect(audioBuffer);
       
       // Convert back to blob
-      const processedBlob = await new Promise<Blob>((resolve) => {
-        const channels = processedBuffer.numberOfChannels;
-        const length = processedBuffer.length;
-        const offlineContext = new OfflineAudioContext(channels, length, processedBuffer.sampleRate);
-        const source = offlineContext.createBufferSource();
-        source.buffer = processedBuffer;
-        source.connect(offlineContext.destination);
-        source.start();
-        
-        offlineContext.startRendering().then((renderedBuffer) => {
-          const wavBlob = bufferToWave(renderedBuffer, renderedBuffer.length);
-          resolve(wavBlob);
-        });
+      console.log('Converting processed buffer to WAV');
+      const processedBlob = await new Promise<Blob>((resolve, reject) => {
+        try {
+          const channels = processedBuffer.numberOfChannels;
+          const length = processedBuffer.length;
+          const offlineContext = new OfflineAudioContext(channels, length, processedBuffer.sampleRate);
+          const source = offlineContext.createBufferSource();
+          source.buffer = processedBuffer;
+          source.connect(offlineContext.destination);
+          source.start();
+          
+          offlineContext.startRendering().then((renderedBuffer) => {
+            const wavBlob = bufferToWave(renderedBuffer, renderedBuffer.length);
+            console.log('WAV blob created:', {
+              size: wavBlob.size,
+              type: wavBlob.type
+            });
+            resolve(wavBlob);
+          }).catch(reject);
+        } catch (err) {
+          reject(err);
+        }
       });
 
+      console.log('Preparing form data for upload');
       const formData = new FormData();
       formData.append('audio', processedBlob, 'audio.wav');
       formData.append('duration', duration.toString());
 
+      console.log('Uploading processed audio');
       const response = await fetch('/api/posts', {
         method: 'POST',
         body: formData,
       });
 
-      if (!response.ok) throw new Error('Upload failed');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
+        throw new Error(errorData.message || `Upload failed with status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log('Upload successful:', result);
 
       toast({
         title: 'Success',
@@ -70,11 +106,14 @@ export function VoiceRecorder() {
 
       mutate('/api/posts');
     } catch (error) {
+      console.error('Error in handleUpload:', error);
       toast({
         title: 'Error',
-        description: 'Failed to upload voice note',
+        description: error instanceof Error ? error.message : 'Failed to upload voice note',
         variant: 'destructive',
       });
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -132,7 +171,7 @@ export function VoiceRecorder() {
   }
 
   return (
-    <>
+    <DialogContent>
       <DialogHeader>
         <DialogTitle>Record Voice Note</DialogTitle>
         <DialogDescription>
@@ -152,6 +191,7 @@ export function VoiceRecorder() {
             variant={isRecording ? 'destructive' : 'default'}
             className="rounded-full w-16 h-16"
             onClick={isRecording ? stopRecording : startRecording}
+            aria-label={isRecording ? "Stop Recording" : "Start Recording"}
           >
             {isRecording ? (
               <Square className="h-6 w-6" />
@@ -162,8 +202,8 @@ export function VoiceRecorder() {
         </div>
 
         {duration > 0 && (
-          <p className="text-center">
-            {Math.floor(duration)}s
+          <p className="text-center" aria-live="polite">
+            Recording duration: {Math.floor(duration)}s
           </p>
         )}
 
@@ -172,6 +212,7 @@ export function VoiceRecorder() {
             className="w-full" 
             onClick={handleUpload}
             disabled={isUploading}
+            aria-busy={isUploading}
           >
             {isUploading ? (
               <>
@@ -184,6 +225,6 @@ export function VoiceRecorder() {
           </Button>
         )}
       </div>
-    </>
+    </DialogContent>
   );
 }
