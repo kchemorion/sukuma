@@ -37,7 +37,7 @@ export function Channels() {
   const [isCreating, setIsCreating] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<number | null>(null);
   const [fetchState, setFetchState] = useState<FetchState>({
-    isLoading: true,  // Start with true as requested
+    isLoading: true,
     error: null,
     retryCount: 0
   });
@@ -68,26 +68,20 @@ export function Channels() {
     activeRequests.current.add(controller);
 
     try {
-      console.log(`[Channels] Fetching data from ${url} (attempt ${attempt + 1}/${RETRY_COUNT})`);
-      
-      const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
-      
-      const response = await fetch(url, { signal: controller.signal });
-      clearTimeout(timeoutId);
-      
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Request timed out')), FETCH_TIMEOUT);
+      });
+
+      const fetchPromise = fetch(url, { signal: controller.signal });
+      const response = await Promise.race([fetchPromise, timeoutPromise]);
+
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || `HTTP error! status: ${response.status}`);
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
       const data = await response.json();
-      console.log(`[Channels] Successfully fetched data from ${url}:`, {
-        dataLength: Array.isArray(data) ? data.length : 'single item',
-        timestamp: new Date().toISOString()
-      });
-
-      // Reset state on successful fetch
-      safeSetFetchState(prev => ({
+      
+      safeSetFetchState(() => ({
         isLoading: false,
         error: null,
         retryCount: 0
@@ -95,59 +89,41 @@ export function Channels() {
 
       return data;
     } catch (error) {
-      console.error(`[Channels] Error fetching from ${url}:`, {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        attempt,
-        timestamp: new Date().toISOString()
-      });
-      
       if (!isMounted.current) return null;
-
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error(`Request timeout after ${FETCH_TIMEOUT}ms`);
-      }
 
       if (attempt < RETRY_COUNT - 1) {
         const delay = RETRY_DELAY * Math.pow(2, attempt);
-        console.log(`[Channels] Retrying in ${delay}ms...`);
-        
-        safeSetFetchState(prev => ({
-          isLoading: true,
-          error: null,
-          retryCount: prev.retryCount + 1
-        }));
-
         await new Promise(resolve => setTimeout(resolve, delay));
         return fetchWithRetry(url, attempt + 1);
       }
 
-      safeSetFetchState(prev => ({
+      safeSetFetchState(() => ({
         isLoading: false,
-        error: error instanceof Error ? error : new Error('Unknown error occurred'),
+        error: error instanceof Error ? error : new Error('Failed to fetch data'),
         retryCount: attempt + 1
       }));
-      
+
       throw error;
     } finally {
       activeRequests.current.delete(controller);
     }
   }, [safeSetFetchState]);
 
-  const { data: channels, error: channelsError } = useSWR<Channel[]>(
+  const { data: channels } = useSWR<Channel[]>(
     '/api/channels',
     fetchWithRetry,
     {
       revalidateOnFocus: false,
-      dedupingInterval: 5000,
-      shouldRetryOnError: false,  // Let our custom retry logic handle it
+      dedupingInterval: 10000,
+      shouldRetryOnError: false,
       onError: (error) => {
         console.error('[Channels] SWR error:', error);
-        toast({
-          title: 'Error',
-          description: 'Failed to load channels. Please try again later.',
-          variant: 'destructive',
-        });
-      },
+        safeSetFetchState(prev => ({
+          ...prev,
+          isLoading: false,
+          error: error instanceof Error ? error : new Error('Failed to fetch channels')
+        }));
+      }
     }
   );
 
@@ -156,6 +132,7 @@ export function Channels() {
     fetchWithRetry,
     {
       revalidateOnFocus: false,
+      dedupingInterval: 10000,
       shouldRetryOnError: false,
       onError: (error) => {
         console.error('[Channels] Error loading posts:', error);
@@ -214,34 +191,44 @@ export function Channels() {
     }
   };
 
-  // Updated loading condition check
-  if (!channels && !fetchState.error) {
-    return (
-      <Layout>
-        <div className="max-w-6xl mx-auto p-4">
-          <div className="flex flex-col items-center justify-center p-8 space-y-4">
-            <Loader2 className="h-8 w-8 animate-spin" />
-            <p className="text-sm text-muted-foreground">
-              Loading channels...
-              {fetchState.retryCount > 0 && ` (Retry ${fetchState.retryCount}/${RETRY_COUNT})`}
-            </p>
-          </div>
-        </div>
-      </Layout>
-    );
-  }
-
-  // Render error state
-  if (channelsError || fetchState.error) {
-    const error = channelsError || fetchState.error;
+  // Loading state
+  if (!channels && fetchState.isLoading) {
     return (
       <Layout>
         <ErrorBoundary>
           <div className="max-w-6xl mx-auto p-4">
+            <div className="flex flex-col items-center justify-center p-8 space-y-4">
+              <Loader2 className="h-8 w-8 animate-spin" />
+              <p className="text-sm text-muted-foreground">
+                Loading channels...
+                {fetchState.retryCount > 0 && ` (Retry ${fetchState.retryCount}/${RETRY_COUNT})`}
+              </p>
+            </div>
+          </div>
+        </ErrorBoundary>
+      </Layout>
+    );
+  }
+
+  // Error state
+  if (fetchState.error) {
+    return (
+      <Layout>
+        <ErrorBoundary
+          fallback={
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>
-                Error loading channels: {error?.message}
+                Failed to load channels. Please try refreshing the page.
+              </AlertDescription>
+            </Alert>
+          }
+        >
+          <div className="max-w-6xl mx-auto p-4">
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                Error loading channels: {fetchState.error.message}
                 {fetchState.retryCount > 0 && ` (Retry attempt ${fetchState.retryCount}/${RETRY_COUNT})`}
               </AlertDescription>
             </Alert>
@@ -261,15 +248,12 @@ export function Channels() {
     <Layout>
       <ErrorBoundary
         fallback={
-          <div className="max-w-6xl mx-auto p-4">
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>
-                Something went wrong while rendering the channels page.
-                Please try refreshing the page.
-              </AlertDescription>
-            </Alert>
-          </div>
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              Failed to load channels. Please try refreshing the page.
+            </AlertDescription>
+          </Alert>
         }
       >
         <div className="max-w-6xl mx-auto p-4">
@@ -355,11 +339,7 @@ export function Channels() {
 
             <div className="space-y-4">
               {selectedChannel ? (
-                fetchState.isLoading ? (
-                  <div className="flex items-center justify-center p-8">
-                    <Loader2 className="h-8 w-8 animate-spin" />
-                  </div>
-                ) : postsError ? (
+                postsError ? (
                   <Alert variant="destructive">
                     <AlertCircle className="h-4 w-4" />
                     <AlertDescription>
