@@ -8,6 +8,7 @@ import { Home } from "./pages/Home";
 import { Profile } from "./pages/Profile";
 import { Login } from "./pages/Login";
 import { Register } from "./pages/Register";
+import { Channels } from "./pages/Channels";
 import { Toaster } from "@/components/ui/toaster";
 
 createRoot(document.getElementById("root")!).render(
@@ -18,6 +19,7 @@ createRoot(document.getElementById("root")!).render(
         <Route path="/profile" component={Profile} />
         <Route path="/login" component={Login} />
         <Route path="/register" component={Register} />
+        <Route path="/channels" component={Channels} />
         <Route>404 Page Not Found</Route>
       </Switch>
       <Toaster />

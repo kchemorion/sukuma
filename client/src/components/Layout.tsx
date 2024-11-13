@@ -8,7 +8,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Leaf, LogOut, User } from 'lucide-react';
+import { Leaf, LogOut, User, Radio } from 'lucide-react';
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useUser();
@@ -17,12 +17,22 @@ export function Layout({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen bg-background">
       <header className="border-b">
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
-          <Link href="/">
-            <a className="flex items-center space-x-2">
-              <Leaf className="h-6 w-6 text-green-600" />
-              <span className="font-bold text-lg">Sukuma Wiki</span>
-            </a>
-          </Link>
+          <div className="flex items-center space-x-6">
+            <Link href="/">
+              <Button variant="ghost" className="flex items-center space-x-2">
+                <Leaf className="h-6 w-6 text-green-600" />
+                <span className="font-bold text-lg">Sukuma Wiki</span>
+              </Button>
+            </Link>
+            <nav className="hidden md:flex items-center space-x-4">
+              <Link href="/channels">
+                <Button variant="ghost" className="flex items-center space-x-2">
+                  <Radio className="h-4 w-4" />
+                  <span>Channels</span>
+                </Button>
+              </Link>
+            </nav>
+          </div>
 
           {user ? (
             <DropdownMenu>
@@ -37,10 +47,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <DropdownMenuContent align="end">
                 <DropdownMenuItem asChild>
                   <Link href="/profile">
-                    <a className="flex items-center">
+                    <Button variant="ghost" className="w-full justify-start">
                       <User className="mr-2 h-4 w-4" />
                       Profile
-                    </a>
+                    </Button>
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => logout()}>

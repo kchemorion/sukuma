@@ -11,6 +11,16 @@ import {
   DialogDescription,
   DialogContent,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import type { Channel } from 'db/schema';
+import useSWR from 'swr';
+import { useState } from 'react';
 
 export function VoiceRecorder() {
   const { toast } = useToast();
@@ -25,6 +35,8 @@ export function VoiceRecorder() {
   } = useAudioRecorder();
   
   const { currentEffect, setCurrentEffect, applyEffect } = useAudioEffects();
+  const { data: channels } = useSWR<Channel[]>('/api/channels');
+  const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
 
   const handleUpload = async () => {
     if (!audioBlob) {
@@ -84,6 +96,9 @@ export function VoiceRecorder() {
       const formData = new FormData();
       formData.append('audio', processedBlob, 'audio.wav');
       formData.append('duration', duration.toString());
+      if (selectedChannel) {
+        formData.append('channelId', selectedChannel);
+      }
 
       console.log('Uploading processed audio');
       const response = await fetch('/api/posts', {
@@ -105,6 +120,9 @@ export function VoiceRecorder() {
       });
 
       mutate('/api/posts');
+      if (selectedChannel) {
+        mutate(`/api/channels/${selectedChannel}/posts`);
+      }
     } catch (error) {
       console.error('Error in handleUpload:', error);
       toast({
@@ -185,6 +203,21 @@ export function VoiceRecorder() {
           onEffectChange={setCurrentEffect}
         />
         
+        {channels && (
+          <Select value={selectedChannel ?? undefined} onValueChange={setSelectedChannel}>
+            <SelectTrigger>
+              <SelectValue placeholder="Select a channel (optional)" />
+            </SelectTrigger>
+            <SelectContent>
+              {channels.map((channel) => (
+                <SelectItem key={channel.id} value={channel.id.toString()}>
+                  {channel.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
         <div className="flex justify-center">
           <Button
             size="lg"

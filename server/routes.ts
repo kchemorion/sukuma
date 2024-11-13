@@ -2,7 +2,7 @@ import express, { type Express } from "express";
 import { setupAuth } from "./auth";
 import multer from "multer";
 import { db } from "db";
-import { posts } from "db/schema";
+import { posts, channels } from "db/schema";
 import { eq } from "drizzle-orm";
 import path from "path";
 
@@ -21,6 +21,50 @@ export function registerRoutes(app: Express) {
 
   // Serve uploaded files
   app.use('/uploads', express.static('uploads'));
+
+  // Channel routes
+  app.get("/api/channels", async (req, res) => {
+    try {
+      const allChannels = await db.select().from(channels).orderBy(channels.createdAt);
+      res.json(allChannels);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch channels" });
+    }
+  });
+
+  app.post("/api/channels", async (req: any, res) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const [channel] = await db
+        .insert(channels)
+        .values({
+          name: req.body.name,
+          description: req.body.description,
+          createdBy: req.user.id,
+        })
+        .returning();
+
+      res.json(channel);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create channel" });
+    }
+  });
+
+  app.get("/api/channels/:channelId/posts", async (req, res) => {
+    try {
+      const channelPosts = await db
+        .select()
+        .from(posts)
+        .where(eq(posts.channelId, parseInt(req.params.channelId)))
+        .orderBy(posts.createdAt);
+      res.json(channelPosts);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch channel posts" });
+    }
+  });
 
   // Get all posts
   app.get("/api/posts", async (req, res) => {
@@ -60,6 +104,7 @@ export function registerRoutes(app: Express) {
           username: req.user.username,
           audioUrl: `/uploads/${req.file.filename}`,
           duration: parseInt(req.body.duration),
+          channelId: req.body.channelId ? parseInt(req.body.channelId) : null,
           likes: [],
           replies: [],
         })
