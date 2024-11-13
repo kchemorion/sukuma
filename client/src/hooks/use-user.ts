@@ -2,8 +2,16 @@ import useSWR from "swr";
 import type { User, InsertUser } from "db/schema";
 
 export function useUser() {
-  const { data, error, mutate } = useSWR<User, Error>("/api/user", {
+  const { data, error, mutate } = useSWR<User>("/api/user", {
     revalidateOnFocus: false,
+    shouldRetryOnError: false,
+    onError: (err) => {
+      console.error("[Auth] User fetch error:", err);
+      if (err.status === 401) {
+        // Handle unauthorized error
+        mutate(undefined);
+      }
+    }
   });
 
   return {
