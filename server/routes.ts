@@ -6,6 +6,7 @@ import { posts, channels } from "db/schema";
 import { eq } from "drizzle-orm";
 import path from "path";
 import { sql } from "drizzle-orm";
+import { awardPoints, POINTS } from "./points";
 
 // Configure timeout for database queries (30 seconds)
 const QUERY_TIMEOUT = 30000;
@@ -115,6 +116,9 @@ export function registerRoutes(app: Express) {
           created_by: req.user.id,
         })
         .returning();
+
+      // Award points for creating a channel
+      await awardPoints(req.user.id, POINTS.CREATE_CHANNEL);
 
       console.log('[API] Successfully created channel:', {
         channelId: channel.id,
@@ -270,6 +274,9 @@ export function registerRoutes(app: Express) {
         })
         .returning();
 
+      // Award points for creating a post
+      await awardPoints(req.user.id, POINTS.CREATE_POST);
+
       console.log('[API] Successfully created post:', {
         postId: post.id,
         channelId: post.channel_id,
@@ -313,11 +320,20 @@ export function registerRoutes(app: Express) {
 
       const likes = post[0].likes || [];
       const userIndex = likes.indexOf(req.user.id);
+      const postAuthorId = post[0].user_id;
 
       if (userIndex === -1) {
         likes.push(req.user.id);
+        // Award points to the post author for receiving a like
+        if (postAuthorId !== req.user.id) {  // Don't award points for self-likes
+          await awardPoints(postAuthorId, POINTS.RECEIVE_LIKE);
+        }
       } else {
         likes.splice(userIndex, 1);
+        // Remove points if like is removed
+        if (postAuthorId !== req.user.id) {  // Don't remove points for self-unlikes
+          await awardPoints(postAuthorId, -POINTS.RECEIVE_LIKE);
+        }
       }
 
       await db
@@ -335,6 +351,27 @@ export function registerRoutes(app: Express) {
         timestamp: new Date().toISOString()
       });
       res.status(500).json({ error: "Failed to update like" });
+    }
+  });
+
+  // Add new route for fetching user posts
+  app.get("/api/posts/user/:userId", async (req, res) => {
+    try {
+      const userId = parseInt(req.params.userId);
+      if (isNaN(userId)) {
+        return res.status(400).json({ error: "Invalid user ID" });
+      }
+
+      const userPosts = await db
+        .select()
+        .from(posts)
+        .where(eq(posts.user_id, userId))
+        .orderBy(sql`posts.created_at DESC`);
+
+      res.json(userPosts);
+    } catch (error) {
+      console.error('[API] Error fetching user posts:', error);
+      res.status(500).json({ error: "Failed to fetch user posts" });
     }
   });
 }

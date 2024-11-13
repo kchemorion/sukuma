@@ -22,6 +22,17 @@ import {
 import type { Channel } from 'db/schema';
 import useSWR from 'swr';
 import { useState, useCallback, useEffect } from 'react';
+import * as Tone from 'tone';
+
+// Initialize Tone.js
+async function initializeTone() {
+  try {
+    await Tone.start();
+    console.log('Tone.js initialized');
+  } catch (error) {
+    console.error('Failed to initialize Tone.js:', error);
+  }
+}
 
 // Simple fuzzy search implementation
 function fuzzySearch(items: Channel[], query: string): Channel[] {
@@ -51,6 +62,14 @@ export function VoiceRecorder() {
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filteredChannels, setFilteredChannels] = useState<Channel[]>([]);
+  const [isToneInitialized, setIsToneInitialized] = useState(false);
+
+  // Initialize Tone.js on component mount
+  useEffect(() => {
+    if (!isToneInitialized) {
+      initializeTone().then(() => setIsToneInitialized(true));
+    }
+  }, [isToneInitialized]);
 
   // Update filtered channels when search query changes or channels data updates
   useEffect(() => {
@@ -87,9 +106,12 @@ export function VoiceRecorder() {
         sampleRate: audioBuffer.sampleRate
       });
       
-      // Apply selected effect
-      console.log('Applying effect:', currentEffect);
-      const processedBuffer = await applyEffect(audioBuffer);
+      // Apply selected effect only if Tone.js is initialized
+      let processedBuffer = audioBuffer;
+      if (isToneInitialized && currentEffect !== 'none') {
+        console.log('Applying effect:', currentEffect);
+        processedBuffer = await applyEffect(audioBuffer);
+      }
       
       // Convert back to blob
       console.log('Converting processed buffer to WAV');
@@ -281,6 +303,7 @@ export function VoiceRecorder() {
             onClick={isRecording ? stopRecording : startRecording}
             aria-label={isRecording ? "Stop Recording" : "Start Recording"}
             aria-pressed={isRecording}
+            disabled={!isToneInitialized}
           >
             {isRecording ? (
               <Square className="h-6 w-6" />
@@ -300,7 +323,7 @@ export function VoiceRecorder() {
           <Button 
             className="w-full" 
             onClick={handleUpload}
-            disabled={isUploading}
+            disabled={isUploading || !isToneInitialized}
             aria-busy={isUploading}
           >
             {isUploading ? (
