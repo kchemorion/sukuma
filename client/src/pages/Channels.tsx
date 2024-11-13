@@ -46,11 +46,16 @@ export function Channels() {
   const isMounted = useRef(true);
   const activeRequests = useRef(new Set<AbortController>());
 
-  // Cleanup function for component unmount
+  // Reset fetch state when component mounts and cleanup on unmount
   useEffect(() => {
+    setFetchState({
+      isLoading: true,
+      error: null,
+      retryCount: 0
+    });
+
     return () => {
       isMounted.current = false;
-      // Cancel all active requests
       activeRequests.current.forEach(controller => controller.abort());
       activeRequests.current.clear();
     };
@@ -80,13 +85,6 @@ export function Channels() {
       }
 
       const data = await response.json();
-      
-      safeSetFetchState(() => ({
-        isLoading: false,
-        error: null,
-        retryCount: 0
-      }));
-
       return data;
     } catch (error) {
       if (!isMounted.current) return null;
@@ -97,27 +95,28 @@ export function Channels() {
         return fetchWithRetry(url, attempt + 1);
       }
 
-      safeSetFetchState(() => ({
-        isLoading: false,
-        error: error instanceof Error ? error : new Error('Failed to fetch data'),
-        retryCount: attempt + 1
-      }));
-
       throw error;
     } finally {
       activeRequests.current.delete(controller);
     }
-  }, [safeSetFetchState]);
+  }, []);
 
-  const { data: channels } = useSWR<Channel[]>(
+  const { data: channels, error: channelsError } = useSWR<Channel[]>(
     '/api/channels',
     fetchWithRetry,
     {
       revalidateOnFocus: false,
-      dedupingInterval: 10000,
+      dedupingInterval: 5000,
       shouldRetryOnError: false,
+      onSuccess: () => {
+        safeSetFetchState(prev => ({
+          ...prev,
+          isLoading: false,
+          error: null
+        }));
+      },
       onError: (error) => {
-        console.error('[Channels] SWR error:', error);
+        console.error('[Channels] Error:', error);
         safeSetFetchState(prev => ({
           ...prev,
           isLoading: false,
@@ -132,7 +131,7 @@ export function Channels() {
     fetchWithRetry,
     {
       revalidateOnFocus: false,
-      dedupingInterval: 10000,
+      dedupingInterval: 5000,
       shouldRetryOnError: false,
       onError: (error) => {
         console.error('[Channels] Error loading posts:', error);
@@ -153,11 +152,6 @@ export function Channels() {
     const description = formData.get('description') as string;
 
     try {
-      console.log('[Channels] Creating new channel:', { 
-        name, 
-        timestamp: new Date().toISOString() 
-      });
-      
       const response = await fetch('/api/channels', {
         method: 'POST',
         headers: {
@@ -192,26 +186,25 @@ export function Channels() {
   };
 
   // Loading state
-  if (!channels && fetchState.isLoading) {
+  if (!channels && !channelsError && fetchState.isLoading) {
     return (
       <Layout>
-        <ErrorBoundary>
-          <div className="max-w-6xl mx-auto p-4">
-            <div className="flex flex-col items-center justify-center p-8 space-y-4">
-              <Loader2 className="h-8 w-8 animate-spin" />
-              <p className="text-sm text-muted-foreground">
-                Loading channels...
-                {fetchState.retryCount > 0 && ` (Retry ${fetchState.retryCount}/${RETRY_COUNT})`}
-              </p>
-            </div>
+        <div className="max-w-6xl mx-auto p-4">
+          <div className="flex flex-col items-center justify-center p-8 space-y-4">
+            <Loader2 className="h-8 w-8 animate-spin" />
+            <p className="text-sm text-muted-foreground">
+              Loading channels...
+              {fetchState.retryCount > 0 && ` (Retry ${fetchState.retryCount}/${RETRY_COUNT})`}
+            </p>
           </div>
-        </ErrorBoundary>
+        </div>
       </Layout>
     );
   }
 
   // Error state
-  if (fetchState.error) {
+  if (channelsError || fetchState.error) {
+    const error = channelsError || fetchState.error;
     return (
       <Layout>
         <ErrorBoundary
@@ -228,7 +221,7 @@ export function Channels() {
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>
-                Error loading channels: {fetchState.error.message}
+                Error loading channels: {error?.message}
                 {fetchState.retryCount > 0 && ` (Retry attempt ${fetchState.retryCount}/${RETRY_COUNT})`}
               </AlertDescription>
             </Alert>
