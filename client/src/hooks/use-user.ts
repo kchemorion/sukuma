@@ -1,5 +1,6 @@
 import useSWR from "swr";
 import type { User, InsertUser } from "db/schema";
+import { useState, useEffect } from "react";
 
 interface ExtendedUser {
   id: number;
@@ -15,30 +16,41 @@ interface GuestPreferences {
 }
 
 const GUEST_ID_KEY = 'guest_user_id';
+const RETRY_COUNT = 3;
+const RETRY_INTERVAL = 2000;
 
 export function useUser() {
-  const { data: user, error, mutate } = useSWR<ExtendedUser>("/api/user", {
+  const [retryCount, setRetryCount] = useState(0);
+  const [isRetrying, setIsRetrying] = useState(false);
+
+  const { data: user, error: userError, mutate } = useSWR<ExtendedUser>("/api/user", {
     revalidateOnFocus: true,
-    shouldRetryOnError: true,
+    shouldRetryOnError: false,
     revalidateOnReconnect: true,
     refreshInterval: 30000,
     dedupingInterval: 5000,
     onError: async (err) => {
       console.error('[Auth] Error fetching user:', err);
+      
+      if (retryCount < RETRY_COUNT) {
+        setIsRetrying(true);
+        setTimeout(async () => {
+          setRetryCount(prev => prev + 1);
+          await mutate();
+        }, RETRY_INTERVAL);
+        return;
+      }
+
       try {
-        // Check for existing guest ID in localStorage
         const existingGuestId = localStorage.getItem(GUEST_ID_KEY);
-        
-        // Attempt to restore guest session with existing ID
         const result = await handleAuthRequest("/guest-login", "POST", undefined, existingGuestId);
+        
         if (result.ok && result.data?.user) {
-          // Store new guest ID if provided
           if (result.data.guestId) {
             localStorage.setItem(GUEST_ID_KEY, result.data.guestId);
           }
           await mutate(result.data.user, false);
         } else {
-          // Return default guest user on error
           await mutate({
             id: 0,
             username: 'Guest',
@@ -56,11 +68,14 @@ export function useUser() {
           isGuest: true,
           password: ''
         }, false);
+      } finally {
+        setIsRetrying(false);
+        setRetryCount(0);
       }
     }
   });
 
-  const { data: preferences, mutate: mutatePreferences } = useSWR<GuestPreferences>(
+  const { data: preferences, error: preferencesError, mutate: mutatePreferences } = useSWR<GuestPreferences>(
     user?.isGuest && user.guestId ? "/api/guest-preferences" : null,
     {
       revalidateOnFocus: false,
@@ -69,10 +84,20 @@ export function useUser() {
         'X-Guest-ID': user?.guestId || ''
       },
       onError: (err) => {
-        console.error('[Auth] Error fetching guest preferences:', err);
+        if (!preferencesError || (err?.status !== 401 && err?.status !== 404)) {
+          console.error('[Auth] Error fetching guest preferences:', err);
+        }
       }
     }
   );
+
+  // Reset retry count when component unmounts
+  useEffect(() => {
+    return () => {
+      setRetryCount(0);
+      setIsRetrying(false);
+    };
+  }, []);
 
   const handleAuthRequest = async (
     url: string,
@@ -106,7 +131,8 @@ export function useUser() {
         }
         return { 
           ok: false, 
-          message: data?.message || `Authentication failed: ${response.statusText}` 
+          message: data?.message || `Authentication failed: ${response.statusText}`,
+          status: response.status 
         };
       }
 
@@ -116,7 +142,8 @@ export function useUser() {
       console.error('[Auth] Network error:', e);
       return { 
         ok: false, 
-        message: e instanceof Error ? e.message : 'Network error occurred'
+        message: e instanceof Error ? e.message : 'Network error occurred',
+        status: 0
       };
     }
   };
@@ -125,7 +152,8 @@ export function useUser() {
     if (!user?.isGuest || !user.guestId) {
       return {
         ok: false,
-        message: "Only valid guest users can update preferences"
+        message: "Only valid guest users can update preferences",
+        status: 403
       };
     }
 
@@ -145,7 +173,8 @@ export function useUser() {
       if (!response.ok) {
         return {
           ok: false,
-          message: data.error || "Failed to update preferences"
+          message: data.error || "Failed to update preferences",
+          status: response.status
         };
       }
 
@@ -154,13 +183,13 @@ export function useUser() {
     } catch (error) {
       return {
         ok: false,
-        message: error instanceof Error ? error.message : "Failed to update preferences"
+        message: error instanceof Error ? error.message : "Failed to update preferences",
+        status: 0
       };
     }
   };
 
   const login = async (user: InsertUser) => {
-    // Clear guest ID on regular login
     localStorage.removeItem(GUEST_ID_KEY);
     return handleAuthRequest("/login", "POST", user);
   };
@@ -179,7 +208,8 @@ export function useUser() {
       console.error('[Auth] Guest login error:', error);
       return {
         ok: false,
-        message: error instanceof Error ? error.message : "Guest login failed"
+        message: error instanceof Error ? error.message : "Guest login failed",
+        status: 0
       };
     }
   };
@@ -202,7 +232,8 @@ export function useUser() {
       await mutate(undefined, { revalidate: true });
       return {
         ok: false,
-        message: error instanceof Error ? error.message : 'Logout failed'
+        message: error instanceof Error ? error.message : 'Logout failed',
+        status: 0
       };
     }
   };
@@ -215,9 +246,11 @@ export function useUser() {
   return {
     user: user || { id: 0, username: 'Guest', points: 0, isGuest: true, password: '' },
     preferences: preferences || {},
-    isLoading: !error && !user,
-    isError: error && error.status !== 401,
-    error,
+    isLoading: !userError && !user,
+    isRetrying,
+    isError: userError && userError.status !== 401,
+    error: userError,
+    preferencesError,
     login,
     guestLogin,
     logout,
@@ -230,8 +263,10 @@ type RequestResult =
   | {
       ok: true;
       data?: any;
+      status?: number;
     }
   | {
       ok: false;
       message: string;
+      status: number;
     };
