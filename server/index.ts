@@ -5,18 +5,20 @@ import { setupVite, serveStatic } from "./vite";
 import { createServer } from "http";
 import { setupAuth } from "./auth";
 import session from "express-session";
-import { Pool } from 'pg';
+import pkg from 'pg';
+const { Pool } = pkg;
 import connectPg from 'connect-pg-simple';
 import passport from "passport";
 import path from "path";
 import fs from "fs";
 
-console.log('[Server] Starting...');
+console.log('[Server] Starting with process ID:', process.pid);
 
 // Ensure uploads directory exists
 const uploadsDir = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
+  console.log('[Server] Created uploads directory');
 }
 
 // Environment configuration
@@ -28,16 +30,11 @@ const domain = isProduction
 // Configure PostgreSQL session store with proper error handling
 const PostgresqlStore = connectPg(session);
 const sessionPool = new Pool({
-  host: process.env.PGHOST,
-  port: Number(process.env.PGPORT),
-  database: process.env.PGDATABASE,
-  user: process.env.PGUSER,
-  password: process.env.PGPASSWORD,
+  connectionString: process.env.DATABASE_URL,
   max: 20,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-  keepAlive: true,
-  keepAliveInitialDelayMillis: 10000
+  connectionTimeoutMillis: 5000,
+  keepAlive: true
 });
 
 // Verify database connection and initialize app
@@ -45,7 +42,7 @@ const sessionPool = new Pool({
   try {
     console.log('[Server] Verifying database connection...');
     await sessionPool.query('SELECT NOW()');
-    console.log('[Database] Connection verified');
+    console.log('[Database] Connection verified successfully');
 
     const app = express();
     const server = createServer(app);
@@ -84,21 +81,17 @@ const sessionPool = new Pool({
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
       exposedHeaders: ['Set-Cookie'],
-      maxAge: 86400 // 24 hours
+      maxAge: 86400
     };
 
-    // Apply CORS before session middleware
     app.use(cors(corsOptions));
 
-    // Session store configuration with proper error handling
+    // Session store configuration
     const sessionStore = new PostgresqlStore({
       pool: sessionPool,
       tableName: 'session',
       createTableIfMissing: true,
-      pruneSessionInterval: 60,
-      errorLog: (err) => {
-        console.error('[Session Store] Error:', err);
-      }
+      pruneSessionInterval: 60
     });
 
     // Session middleware configuration
@@ -113,47 +106,21 @@ const sessionPool = new Pool({
         secure: isProduction,
         httpOnly: true,
         sameSite: isProduction ? 'none' : 'lax',
-        maxAge: 24 * 60 * 60 * 1000, // 24 hours
-        path: "/"
+        maxAge: 24 * 60 * 60 * 1000
       }
     });
 
-    // Apply session and authentication middleware
     app.use(sessionMiddleware);
     app.use(passport.initialize());
     app.use(passport.session());
-
-    // Debug middleware for session and authentication issues
-    app.use((req, _res, next) => {
-      if (req.url !== '/health') {
-        console.debug('[Session Debug]', {
-          url: req.url,
-          method: req.method,
-          sessionID: req.sessionID,
-          authenticated: req.isAuthenticated(),
-          session: req.session,
-          cookies: req.headers.cookie,
-          origin: req.headers.origin
-        });
-      }
-      next();
-    });
 
     // Initialize routes
     setupAuth(app);
     registerRoutes(app);
 
     // Health check endpoint
-    app.get('/health', (req, res) => {
-      res.json({ 
-        status: 'ok',
-        timestamp: new Date().toISOString(),
-        session: {
-          id: req.sessionID,
-          active: !!req.session,
-          authenticated: req.isAuthenticated()
-        }
-      });
+    app.get('/health', (_req, res) => {
+      res.json({ status: 'ok', timestamp: new Date().toISOString() });
     });
 
     // Error handling middleware
@@ -162,9 +129,7 @@ const sessionPool = new Pool({
         error: err.message,
         stack: err.stack,
         url: req.url,
-        method: req.method,
-        sessionID: req.sessionID,
-        authenticated: req.isAuthenticated()
+        method: req.method
       });
 
       res.status(500).json({ 
@@ -182,13 +147,38 @@ const sessionPool = new Pool({
     }
 
     const PORT = Number(process.env.PORT) || 5000;
-    server.listen(PORT, "0.0.0.0", () => {
-      console.log(`[Server] Running at http://0.0.0.0:${PORT}`);
-      console.log(`[Server] Environment: ${process.env.NODE_ENV || 'development'}`);
+    
+    // Create an error handler for the server
+    server.on('error', (error: NodeJS.ErrnoException) => {
+      console.error('[Server] Failed to start:', error);
+      if (error.code === 'EADDRINUSE') {
+        console.error(`[Server] Port ${PORT} is already in use`);
+      }
+      process.exit(1);
+    });
+
+    // Listen with a Promise to ensure we actually bind to the port
+    await new Promise<void>((resolve, reject) => {
+      server.listen(PORT, "0.0.0.0", () => {
+        console.log(`[Server] Running at http://0.0.0.0:${PORT}`);
+        console.log(`[Server] Environment: ${process.env.NODE_ENV || 'development'}`);
+        resolve();
+      }).on('error', reject);
     });
 
   } catch (error) {
-    console.error('[Server] Startup error:', error);
+    console.error('[Server] Fatal startup error:', error);
     process.exit(1);
   }
 })();
+
+// Handle unexpected errors
+process.on('uncaughtException', (error) => {
+  console.error('[Server] Uncaught Exception:', error);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Server] Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
+});
