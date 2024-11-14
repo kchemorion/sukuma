@@ -9,6 +9,14 @@ export const users = pgTable("users", {
   points: integer("points").notNull().default(0),
 });
 
+export const guest_preferences = pgTable("guest_preferences", {
+  id: integer().primaryKey().generatedAlwaysAsIdentity(),
+  session_id: text("session_id").unique().notNull(),
+  preferences: jsonb("preferences").notNull().default({}),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+  updated_at: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const channels = pgTable("channels", {
   id: integer().primaryKey().generatedAlwaysAsIdentity(),
   name: text("name").unique().notNull(),
@@ -34,6 +42,11 @@ export const insertUserSchema = createInsertSchema(users);
 export const selectUserSchema = createSelectSchema(users);
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = z.infer<typeof selectUserSchema>;
+
+export const insertGuestPreferencesSchema = createInsertSchema(guest_preferences);
+export const selectGuestPreferencesSchema = createSelectSchema(guest_preferences);
+export type InsertGuestPreferences = z.infer<typeof insertGuestPreferencesSchema>;
+export type GuestPreferences = z.infer<typeof selectGuestPreferencesSchema>;
 
 export const insertChannelSchema = createInsertSchema(channels);
 export const selectChannelSchema = createSelectSchema(channels);

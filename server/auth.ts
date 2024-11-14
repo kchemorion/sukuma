@@ -3,7 +3,7 @@ import { IVerifyOptions, Strategy as LocalStrategy } from "passport-local";
 import { type Express } from "express";
 import { scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { promisify } from "util";
-import { users, insertUserSchema, type User as SelectUser } from "db/schema";
+import { users, insertUserSchema, type User as SelectUser, guest_preferences } from "db/schema";
 import { db } from "db";
 import { eq } from "drizzle-orm";
 
@@ -95,7 +95,7 @@ export function setupAuth(app: Express) {
     }
   });
 
-  app.post("/guest-login", (req, res) => {
+  app.post("/guest-login", async (req, res) => {
     console.log('[Auth] Guest login initiated');
     
     // Generate a unique guest username
@@ -107,13 +107,19 @@ export function setupAuth(app: Express) {
       isGuest: true
     };
 
-    // Set up guest session
-    req.session.guestUser = guestUser;
-    req.session.save((err) => {
-      if (err) {
-        console.error('[Auth] Guest session save error:', err);
-        return res.status(500).json({ message: "Error creating guest session" });
-      }
+    try {
+      // Set up guest session
+      req.session.guestUser = guestUser;
+
+      // Create guest preferences
+      await db.insert(guest_preferences)
+        .values({
+          session_id: req.sessionID,
+          preferences: {},
+        })
+        .onConflictDoNothing();
+
+      await req.session.save();
 
       console.log('[Auth] Guest login successful:', { 
         guestId: guestUser.username,
@@ -124,7 +130,13 @@ export function setupAuth(app: Express) {
         message: "Guest login successful",
         user: guestUser
       });
-    });
+    } catch (error) {
+      console.error('[Auth] Guest login error:', error);
+      res.status(500).json({ 
+        error: "Failed to create guest session",
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
   });
 
   app.post("/register", async (req, res, next) => {

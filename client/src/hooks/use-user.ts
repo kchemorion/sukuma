@@ -5,8 +5,12 @@ interface ExtendedUser extends User {
   isGuest?: boolean;
 }
 
+interface GuestPreferences {
+  [key: string]: any;
+}
+
 export function useUser() {
-  const { data, error, mutate } = useSWR<ExtendedUser>("/api/user", {
+  const { data: user, error, mutate } = useSWR<ExtendedUser>("/api/user", {
     revalidateOnFocus: true,
     shouldRetryOnError: true,
     revalidateOnReconnect: true,
@@ -23,6 +27,14 @@ export function useUser() {
       }, false);
     }
   });
+
+  const { data: preferences, mutate: mutatePreferences } = useSWR<GuestPreferences>(
+    user?.isGuest ? "/api/guest-preferences" : null,
+    {
+      revalidateOnFocus: false,
+      dedupingInterval: 5000,
+    }
+  );
 
   const handleAuthRequest = async (
     url: string,
@@ -59,6 +71,43 @@ export function useUser() {
       return { 
         ok: false, 
         message: e instanceof Error ? e.message : 'Network error occurred'
+      };
+    }
+  };
+
+  const updateGuestPreferences = async (newPreferences: GuestPreferences): Promise<RequestResult> => {
+    if (!user?.isGuest) {
+      return {
+        ok: false,
+        message: "Only guest users can update preferences"
+      };
+    }
+
+    try {
+      const response = await fetch("/api/guest-preferences", {
+        method: "POST",
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(newPreferences),
+        credentials: 'include'
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        return {
+          ok: false,
+          message: data.error || "Failed to update preferences"
+        };
+      }
+
+      await mutatePreferences(data.preferences);
+      return { ok: true, data };
+    } catch (error) {
+      return {
+        ok: false,
+        message: error instanceof Error ? error.message : "Failed to update preferences"
       };
     }
   };
@@ -100,14 +149,16 @@ export function useUser() {
   };
 
   return {
-    user: data || { id: 0, username: 'Guest', points: 0, isGuest: true },
-    isLoading: !error && !data,
+    user: user || { id: 0, username: 'Guest', points: 0, isGuest: true },
+    preferences: preferences || {},
+    isLoading: !error && !user,
     isError: error && error.status !== 401,
     error,
     login,
     guestLogin,
     logout,
     register,
+    updateGuestPreferences,
   };
 }
 

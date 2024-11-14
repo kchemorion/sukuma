@@ -2,7 +2,7 @@ import express, { type Express } from "express";
 import { setupAuth } from "./auth";
 import multer from "multer";
 import { db } from "db";
-import { posts, channels } from "db/schema";
+import { posts, channels, guest_preferences } from "db/schema";
 import { eq } from "drizzle-orm";
 import path from "path";
 import { sql } from "drizzle-orm";
@@ -414,6 +414,74 @@ export function registerRoutes(app: Express) {
     } catch (error) {
       console.error('[API] Error fetching post replies:', error);
       res.status(500).json({ error: "Failed to fetch replies" });
+    }
+  });
+
+  // Guest preferences routes
+  app.get("/api/guest-preferences", async (req, res) => {
+    try {
+      if (!req.session.guestUser) {
+        return res.status(401).json({ 
+          error: "Unauthorized",
+          details: "Only guest users can access preferences"
+        });
+      }
+
+      const [preferences] = await db
+        .select()
+        .from(guest_preferences)
+        .where(eq(guest_preferences.session_id, req.sessionID))
+        .limit(1);
+
+      res.json(preferences?.preferences || {});
+    } catch (error) {
+      console.error('[API] Error fetching guest preferences:', error);
+      res.status(500).json({ 
+        error: "Failed to fetch guest preferences",
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  app.post("/api/guest-preferences", async (req, res) => {
+    try {
+      if (!req.session.guestUser) {
+        return res.status(401).json({ 
+          error: "Unauthorized",
+          details: "Only guest users can update preferences"
+        });
+      }
+
+      const [existingPrefs] = await db
+        .select()
+        .from(guest_preferences)
+        .where(eq(guest_preferences.session_id, req.sessionID))
+        .limit(1);
+
+      if (existingPrefs) {
+        await db
+          .update(guest_preferences)
+          .set({ 
+            preferences: req.body,
+            updated_at: new Date()
+          })
+          .where(eq(guest_preferences.session_id, req.sessionID));
+      } else {
+        await db
+          .insert(guest_preferences)
+          .values({
+            session_id: req.sessionID,
+            preferences: req.body,
+          });
+      }
+
+      res.json({ success: true, preferences: req.body });
+    } catch (error) {
+      console.error('[API] Error updating guest preferences:', error);
+      res.status(500).json({ 
+        error: "Failed to update guest preferences",
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
     }
   });
 }
