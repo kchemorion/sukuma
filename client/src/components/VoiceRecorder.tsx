@@ -19,18 +19,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { Channel } from 'db/schema';
+import type { Channel, Post } from 'db/schema';
 import useSWR from 'swr';
 import { useState, useCallback, useEffect } from 'react';
 import * as Tone from 'tone';
 
-// Initialize Tone.js
+// Initialize Tone.js with proper error handling
 async function initializeTone() {
   try {
     await Tone.start();
-    console.log('Tone.js initialized');
+    console.log('Tone.js initialized successfully');
+    return true;
   } catch (error) {
     console.error('Failed to initialize Tone.js:', error);
+    return false;
   }
 }
 
@@ -45,7 +47,12 @@ function fuzzySearch(items: Channel[], query: string): Channel[] {
   });
 }
 
-export function VoiceRecorder() {
+interface VoiceRecorderProps {
+  replyingTo?: Post;
+  onSuccess?: () => void;
+}
+
+export function VoiceRecorder({ replyingTo, onSuccess }: VoiceRecorderProps) {
   const { toast } = useToast();
   const {
     isRecording,
@@ -63,11 +70,24 @@ export function VoiceRecorder() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filteredChannels, setFilteredChannels] = useState<Channel[]>([]);
   const [isToneInitialized, setIsToneInitialized] = useState(false);
+  const [initializationError, setInitializationError] = useState<string | null>(null);
 
-  // Initialize Tone.js on component mount
+  // Initialize Tone.js on component mount with proper error handling
   useEffect(() => {
     if (!isToneInitialized) {
-      initializeTone().then(() => setIsToneInitialized(true));
+      const initTone = async () => {
+        try {
+          const success = await initializeTone();
+          setIsToneInitialized(success);
+          if (!success) {
+            setInitializationError('Failed to initialize audio system. Please try again.');
+          }
+        } catch (error) {
+          console.error('Error initializing Tone.js:', error);
+          setInitializationError('Audio system initialization failed. Please refresh the page.');
+        }
+      };
+      initTone();
     }
   }, [isToneInitialized]);
 
@@ -84,7 +104,11 @@ export function VoiceRecorder() {
 
   const handleUpload = async () => {
     if (!audioBlob) {
-      console.error('No audio blob available');
+      toast({
+        title: 'Error',
+        description: 'No audio recording found. Please record something first.',
+        variant: 'destructive',
+      });
       return;
     }
 
@@ -106,20 +130,21 @@ export function VoiceRecorder() {
         sampleRate: audioBuffer.sampleRate
       });
       
-      // Apply selected effect only if Tone.js is initialized
       let processedBuffer = audioBuffer;
       if (isToneInitialized && currentEffect !== 'none') {
         console.log('Applying effect:', currentEffect);
         processedBuffer = await applyEffect(audioBuffer);
       }
       
-      // Convert back to blob
-      console.log('Converting processed buffer to WAV');
       const processedBlob = await new Promise<Blob>((resolve, reject) => {
         try {
           const channels = processedBuffer.numberOfChannels;
           const length = processedBuffer.length;
-          const offlineContext = new OfflineAudioContext(channels, length, processedBuffer.sampleRate);
+          const offlineContext = new OfflineAudioContext(
+            channels,
+            length,
+            processedBuffer.sampleRate
+          );
           const source = offlineContext.createBufferSource();
           source.buffer = processedBuffer;
           source.connect(offlineContext.destination);
@@ -145,6 +170,9 @@ export function VoiceRecorder() {
       if (selectedChannel) {
         formData.append('channel_id', selectedChannel);
       }
+      if (replyingTo) {
+        formData.append('reply_to', replyingTo.id.toString());
+      }
 
       console.log('Uploading processed audio');
       const response = await fetch('/api/posts', {
@@ -162,14 +190,19 @@ export function VoiceRecorder() {
 
       toast({
         title: 'Success',
-        description: 'Your voice note has been posted!',
+        description: replyingTo ? 'Your reply has been posted!' : 'Your voice note has been posted!',
       });
 
-      // Refresh both the main feed and channel feed if posting to a channel
+      // Refresh the relevant feeds
       mutate('/api/posts');
       if (selectedChannel) {
         mutate(`/api/channels/${selectedChannel}/posts`);
       }
+      if (replyingTo) {
+        mutate(`/api/posts/${replyingTo.id}/replies`);
+      }
+      
+      onSuccess?.();
     } catch (error) {
       console.error('Error in handleUpload:', error);
       toast({
@@ -188,7 +221,6 @@ export function VoiceRecorder() {
     const length = len * numOfChan * 2 + 44;
     const buffer = new ArrayBuffer(length);
     const view = new DataView(buffer);
-    const channels = [];
     let pos = 0;
     let offset = 0;
 
@@ -238,62 +270,75 @@ export function VoiceRecorder() {
   return (
     <DialogContent>
       <DialogHeader>
-        <DialogTitle>Record Voice Note</DialogTitle>
+        <DialogTitle>
+          {replyingTo ? 'Reply with Voice Note' : 'Record Voice Note'}
+        </DialogTitle>
         <DialogDescription>
-          Record your voice note, add effects, and optionally select a channel to post to
+          {replyingTo 
+            ? `Record your voice reply to ${replyingTo.username}'s post`
+            : 'Record your voice note, add effects, and optionally select a channel to post to'
+          }
         </DialogDescription>
       </DialogHeader>
       
       <div className="space-y-4 pt-4">
+        {initializationError && (
+          <div className="text-sm text-destructive text-center">
+            {initializationError}
+          </div>
+        )}
+
         <VoiceEffectSelector 
           currentEffect={currentEffect}
           onEffectChange={setCurrentEffect}
         />
         
-        <div className="space-y-2">
-          <div className="relative">
-            <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search channels..."
-              value={searchQuery}
-              onChange={handleSearch}
-              className="pl-8"
-              aria-label="Search channels"
-            />
-          </div>
-          
-          {isLoadingChannels ? (
-            <div className="flex items-center justify-center p-2">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="ml-2 text-sm text-muted-foreground">Loading channels...</span>
+        {!replyingTo && (
+          <div className="space-y-2">
+            <div className="relative">
+              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search channels..."
+                value={searchQuery}
+                onChange={handleSearch}
+                className="pl-8"
+                aria-label="Search channels"
+              />
             </div>
-          ) : (
-            <Select
-              value={selectedChannel ?? undefined}
-              onValueChange={setSelectedChannel}
-              disabled={isLoadingChannels}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select a channel (optional)" />
-              </SelectTrigger>
-              <SelectContent>
-                {filteredChannels.map((channel) => (
-                  <SelectItem
-                    key={channel.id}
-                    value={channel.id.toString()}
-                  >
-                    {channel.name}
-                  </SelectItem>
-                ))}
-                {filteredChannels.length === 0 && (
-                  <div className="p-2 text-sm text-muted-foreground text-center">
-                    No channels found
-                  </div>
-                )}
-              </SelectContent>
-            </Select>
-          )}
-        </div>
+            
+            {isLoadingChannels ? (
+              <div className="flex items-center justify-center p-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span className="ml-2 text-sm text-muted-foreground">Loading channels...</span>
+              </div>
+            ) : (
+              <Select
+                value={selectedChannel ?? undefined}
+                onValueChange={setSelectedChannel}
+                disabled={isLoadingChannels}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a channel (optional)" />
+                </SelectTrigger>
+                <SelectContent>
+                  {filteredChannels.map((channel) => (
+                    <SelectItem
+                      key={channel.id}
+                      value={channel.id.toString()}
+                    >
+                      {channel.name}
+                    </SelectItem>
+                  ))}
+                  {filteredChannels.length === 0 && (
+                    <div className="p-2 text-sm text-muted-foreground text-center">
+                      No channels found
+                    </div>
+                  )}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+        )}
 
         <div className="flex justify-center" role="region" aria-label="Voice recording controls">
           <Button
@@ -303,7 +348,7 @@ export function VoiceRecorder() {
             onClick={isRecording ? stopRecording : startRecording}
             aria-label={isRecording ? "Stop Recording" : "Start Recording"}
             aria-pressed={isRecording}
-            disabled={!isToneInitialized}
+            disabled={!isToneInitialized || !!initializationError}
           >
             {isRecording ? (
               <Square className="h-6 w-6" />
@@ -323,7 +368,7 @@ export function VoiceRecorder() {
           <Button 
             className="w-full" 
             onClick={handleUpload}
-            disabled={isUploading || !isToneInitialized}
+            disabled={isUploading || !isToneInitialized || !!initializationError}
             aria-busy={isUploading}
           >
             {isUploading ? (
@@ -332,7 +377,7 @@ export function VoiceRecorder() {
                 Uploading...
               </>
             ) : (
-              'Post Voice Note'
+              replyingTo ? 'Post Reply' : 'Post Voice Note'
             )}
           </Button>
         )}

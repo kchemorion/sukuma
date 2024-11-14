@@ -25,8 +25,8 @@ export const posts = pgTable("posts", {
   duration: integer("duration").notNull(),
   transcript: text("transcript"),
   channel_id: integer("channel_id").references(() => channels.id),
+  parent_id: integer("parent_id").references(() => posts.id),
   likes: integer("likes").array(),
-  replies: integer("replies").array(),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 

@@ -235,11 +235,13 @@ export function registerRoutes(app: Express) {
 
     try {
       const channelId = req.body.channel_id ? parseInt(req.body.channel_id) : null;
+      const parentId = req.body.parent_id ? parseInt(req.body.parent_id) : null;
       
       console.log('[API] Creating new post:', {
         userId: req.user.id,
         username: req.user.username,
         channelId,
+        parentId,
         fileName: req.file.filename,
         timestamp: new Date().toISOString()
       });
@@ -261,6 +263,23 @@ export function registerRoutes(app: Express) {
         }
       }
 
+      // Verify parent post exists if this is a reply
+      if (parentId) {
+        const [parentPost] = await db
+          .select()
+          .from(posts)
+          .where(eq(posts.id, parentId))
+          .limit(1);
+
+        if (!parentPost) {
+          console.warn('[API] Attempted to reply to non-existent post:', parentId);
+          return res.status(400).json({
+            error: "Invalid parent post",
+            details: "The post you're trying to reply to does not exist"
+          });
+        }
+      }
+
       const [post] = await db
         .insert(posts)
         .values({
@@ -269,8 +288,8 @@ export function registerRoutes(app: Express) {
           audio_url: `/uploads/${req.file.filename}`,
           duration: parseInt(req.body.duration),
           channel_id: channelId,
+          parent_id: parentId,
           likes: [],
-          replies: [],
         })
         .returning();
 
@@ -280,6 +299,7 @@ export function registerRoutes(app: Express) {
       console.log('[API] Successfully created post:', {
         postId: post.id,
         channelId: post.channel_id,
+        parentId: post.parent_id,
         userId: post.user_id,
         timestamp: new Date().toISOString()
       });
@@ -291,6 +311,7 @@ export function registerRoutes(app: Express) {
         stack: error instanceof Error ? error.stack : undefined,
         userId: req.user.id,
         channelId: req.body.channel_id,
+        parentId: req.body.parent_id,
         timestamp: new Date().toISOString()
       });
       res.status(500).json({ 
@@ -372,6 +393,27 @@ export function registerRoutes(app: Express) {
     } catch (error) {
       console.error('[API] Error fetching user posts:', error);
       res.status(500).json({ error: "Failed to fetch user posts" });
+    }
+  });
+
+  // Single route for fetching post replies
+  app.get("/api/posts/:postId/replies", async (req, res) => {
+    try {
+      const postId = parseInt(req.params.postId);
+      if (isNaN(postId)) {
+        return res.status(400).json({ error: "Invalid post ID" });
+      }
+
+      const replies = await db
+        .select()
+        .from(posts)
+        .where(eq(posts.parent_id, postId))
+        .orderBy(sql`posts.created_at DESC`);
+
+      res.json(replies);
+    } catch (error) {
+      console.error('[API] Error fetching post replies:', error);
+      res.status(500).json({ error: "Failed to fetch replies" });
     }
   });
 }

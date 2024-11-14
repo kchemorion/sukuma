@@ -8,7 +8,6 @@ export function useUser() {
     onError: (err) => {
       console.error("[Auth] User fetch error:", err);
       if (err.status === 401) {
-        // Handle unauthorized error
         mutate(undefined);
       }
     }
@@ -53,9 +52,12 @@ async function handleRequest(
   try {
     const response = await fetch(url, {
       method,
-      headers: body ? { "Content-Type": "application/json" } : undefined,
+      headers: {
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+        'Accept': 'application/json'
+      },
       body: body ? JSON.stringify(body) : undefined,
-      credentials: "include",
+      credentials: 'include'
     });
 
     if (!response.ok) {
