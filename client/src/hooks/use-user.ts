@@ -7,13 +7,20 @@ interface ExtendedUser extends User {
 
 export function useUser() {
   const { data, error, mutate } = useSWR<ExtendedUser>("/api/user", {
-    revalidateOnFocus: false,
-    shouldRetryOnError: false,
-    revalidateOnReconnect: false,
-    refreshInterval: 0,
-    dedupingInterval: 30000,
+    revalidateOnFocus: true,
+    shouldRetryOnError: true,
+    revalidateOnReconnect: true,
+    refreshInterval: 30000,
+    dedupingInterval: 5000,
     onError: (err) => {
       console.error('[Auth] Error fetching user:', err);
+      // Return guest user on error
+      mutate({
+        id: 0,
+        username: 'Guest',
+        points: 0,
+        isGuest: true
+      }, false);
     }
   });
 
@@ -73,7 +80,7 @@ export function useUser() {
   };
 
   return {
-    user: data,
+    user: data || { id: 0, username: 'Guest', points: 0, isGuest: true },
     isLoading: !error && !data,
     isError: error && error.status !== 401,
     error,
