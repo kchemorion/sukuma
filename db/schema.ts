@@ -1,4 +1,4 @@
-import { pgTable, text, integer, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, timestamp, jsonb, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -7,6 +7,9 @@ export const users = pgTable("users", {
   username: text("username").unique().notNull(),
   password: text("password").notNull(),
   points: integer("points").notNull().default(0),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+  avatar_url: text("avatar_url"),
+  is_moderator: boolean("is_moderator").default(false),
 });
 
 export const guest_preferences = pgTable("guest_preferences", {
@@ -25,12 +28,26 @@ export const channels = pgTable("channels", {
   description: text("description").notNull(),
   created_at: timestamp("created_at").defaultNow().notNull(),
   created_by: integer("created_by").notNull().references(() => users.id),
+  rules: jsonb("rules").notNull().default([]),
+  subscriber_count: integer("subscriber_count").notNull().default(0),
+  banner_url: text("banner_url"),
+  theme_color: text("theme_color"),
+  is_private: boolean("is_private").default(false),
+  available_flairs: jsonb("available_flairs").notNull().default([]),
+  moderators: integer("moderators").array(),
+});
+
+export const channel_subscribers = pgTable("channel_subscribers", {
+  channel_id: integer("channel_id").notNull().references(() => channels.id),
+  user_id: integer("user_id").notNull().references(() => users.id),
+  subscribed_at: timestamp("subscribed_at").defaultNow().notNull(),
 });
 
 export const posts = pgTable("posts", {
   id: integer().primaryKey().generatedAlwaysAsIdentity(),
   user_id: integer("user_id").notNull().references(() => users.id),
   username: text("username").notNull(),
+  title: text("title").notNull(),
   audio_url: text("audio_url").notNull(),
   duration: integer("duration").notNull(),
   transcript: text("transcript"),
@@ -38,8 +55,14 @@ export const posts = pgTable("posts", {
   parent_id: integer("parent_id").references(() => posts.id),
   likes: integer("likes").array(),
   created_at: timestamp("created_at").defaultNow().notNull(),
+  flair: text("flair"),
+  is_pinned: boolean("is_pinned").default(false),
+  is_locked: boolean("is_locked").default(false),
+  view_count: integer("view_count").notNull().default(0),
+  tags: text("tags").array(),
 });
 
+// Schema types
 export const insertUserSchema = createInsertSchema(users);
 export const selectUserSchema = createSelectSchema(users);
 export type InsertUser = z.infer<typeof insertUserSchema>;

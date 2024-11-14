@@ -16,19 +16,25 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { useToast } from '@/hooks/use-toast';
-import { Plus, Loader2, AlertCircle } from 'lucide-react';
+import { 
+  Plus, 
+  Loader2, 
+  AlertCircle,
+  Users,
+  Settings,
+  Lock,
+  Pin,
+  Eye,
+  Tag,
+  Award
+} from 'lucide-react';
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { Badge } from "@/components/ui/badge";
 
-// Constants for retry and timeout
-const RETRY_COUNT = 3;
-const FETCH_TIMEOUT = 15000; // 15 seconds
-const RETRY_DELAY = 2000; // 2 seconds initial delay with exponential backoff
-
-interface FetchState {
-  isLoading: boolean;
-  error: Error | null;
-  retryCount: number;
+interface ChannelWithSubscription extends Channel {
+  isSubscribed?: boolean;
+  isModerator?: boolean;
 }
 
 export function Channels() {
@@ -36,128 +42,108 @@ export function Channels() {
   const { toast } = useToast();
   const [isCreating, setIsCreating] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<number | null>(null);
-  const [fetchState, setFetchState] = useState<FetchState>({
-    isLoading: true,
-    error: null,
-    retryCount: 0
+  const [channelSettings, setChannelSettings] = useState<{
+    isOpen: boolean;
+    channelId: number | null;
+  }>({
+    isOpen: false,
+    channelId: null,
   });
 
-  // Use refs to track mounted state and active requests
-  const isMounted = useRef(true);
-  const activeRequests = useRef(new Set<AbortController>());
-
-  // Reset fetch state when component mounts and cleanup on unmount
-  useEffect(() => {
-    setFetchState({
-      isLoading: true,
-      error: null,
-      retryCount: 0
-    });
-
-    return () => {
-      isMounted.current = false;
-      activeRequests.current.forEach(controller => controller.abort());
-      activeRequests.current.clear();
-    };
-  }, []);
-
-  // Safe state update function
-  const safeSetFetchState = useCallback((updater: (prev: FetchState) => FetchState) => {
-    if (isMounted.current) {
-      setFetchState(updater);
-    }
-  }, []);
-
-  const fetchWithRetry = useCallback(async (url: string, attempt: number = 0): Promise<any> => {
-    const controller = new AbortController();
-    activeRequests.current.add(controller);
-
-    try {
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Request timed out')), FETCH_TIMEOUT);
-      });
-
-      const fetchPromise = fetch(url, { signal: controller.signal });
-      const response = await Promise.race([fetchPromise, timeoutPromise]);
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      return data;
-    } catch (error) {
-      if (!isMounted.current) return null;
-
-      if (attempt < RETRY_COUNT - 1) {
-        const delay = RETRY_DELAY * Math.pow(2, attempt);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        return fetchWithRetry(url, attempt + 1);
-      }
-
-      throw error;
-    } finally {
-      activeRequests.current.delete(controller);
-    }
-  }, []);
-
-  const { data: channels, error: channelsError } = useSWR<Channel[]>(
+  // Fetch channels with subscription status
+  const { data: channels, error: channelsError } = useSWR<ChannelWithSubscription[]>(
     '/api/channels',
-    fetchWithRetry,
+    async (url) => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Failed to fetch channels');
+      const channels = await response.json();
+      
+      if (user) {
+        // Fetch user's subscriptions and moderator status
+        const subscriptionsResponse = await fetch(`/api/users/${user.id}/subscriptions`);
+        const subscriptions = await subscriptionsResponse.json();
+        
+        return channels.map(channel => ({
+          ...channel,
+          isSubscribed: subscriptions.some((s: any) => s.channel_id === channel.id),
+          isModerator: channel.moderators?.includes(user.id)
+        }));
+      }
+      
+      return channels;
+    },
     {
       revalidateOnFocus: false,
       dedupingInterval: 5000,
-      shouldRetryOnError: false,
-      onSuccess: () => {
-        safeSetFetchState(prev => ({
-          ...prev,
-          isLoading: false,
-          error: null
-        }));
-      },
-      onError: (error) => {
-        console.error('[Channels] Error:', error);
-        safeSetFetchState(prev => ({
-          ...prev,
-          isLoading: false,
-          error: error instanceof Error ? error : new Error('Failed to fetch channels')
-        }));
-      }
     }
   );
 
   const { data: channelPosts, error: postsError } = useSWR<Post[]>(
     selectedChannel ? `/api/channels/${selectedChannel}/posts` : null,
-    fetchWithRetry,
+    async (url) => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Failed to fetch posts');
+      return response.json();
+    },
     {
       revalidateOnFocus: false,
       dedupingInterval: 5000,
-      shouldRetryOnError: false,
-      onError: (error) => {
-        console.error('[Channels] Error loading posts:', error);
-        toast({
-          title: 'Error',
-          description: 'Failed to load channel posts. Please try again later.',
-          variant: 'destructive',
-        });
-      },
     }
   );
+
+  const handleSubscribe = async (channelId: number) => {
+    if (!user) {
+      toast({
+        title: 'Error',
+        description: 'Please login to subscribe to channels',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    try {
+      const channel = channels?.find(c => c.id === channelId);
+      const isSubscribed = channel?.isSubscribed;
+      
+      const response = await fetch(`/api/channels/${channelId}/subscribe`, {
+        method: isSubscribed ? 'DELETE' : 'POST',
+      });
+
+      if (!response.ok) throw new Error('Failed to update subscription');
+
+      toast({
+        title: 'Success',
+        description: `Successfully ${isSubscribed ? 'unsubscribed from' : 'subscribed to'} channel`,
+      });
+
+      mutate('/api/channels'); // Refresh channels
+    } catch (error) {
+      console.error('[Channels] Subscription error:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to update subscription',
+        variant: 'destructive',
+      });
+    }
+  };
 
   const createChannel = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setIsCreating(true);
     const formData = new FormData(event.currentTarget);
-    const name = formData.get('name') as string;
-    const description = formData.get('description') as string;
-
+    
     try {
       const response = await fetch('/api/channels', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ name, description }),
+        body: JSON.stringify({
+          name: formData.get('name'),
+          description: formData.get('description'),
+          rules: [],
+          is_private: formData.get('is_private') === 'true',
+        }),
       });
 
       if (!response.ok) {
@@ -170,7 +156,6 @@ export function Channels() {
         description: 'Channel created successfully',
       });
 
-      // Reset form and refresh channels
       (event.target as HTMLFormElement).reset();
       mutate('/api/channels');
     } catch (error) {
@@ -186,51 +171,35 @@ export function Channels() {
   };
 
   // Loading state
-  if (!channels && !channelsError && fetchState.isLoading) {
+  if (!channels && !channelsError) {
     return (
       <Layout>
-        <div className="max-w-6xl mx-auto p-4">
-          <div className="flex flex-col items-center justify-center p-8 space-y-4">
-            <Loader2 className="h-8 w-8 animate-spin" />
-            <p className="text-sm text-muted-foreground">
-              Loading channels...
-              {fetchState.retryCount > 0 && ` (Retry ${fetchState.retryCount}/${RETRY_COUNT})`}
-            </p>
-          </div>
+        <div className="flex items-center justify-center min-h-screen">
+          <Loader2 className="h-8 w-8 animate-spin" />
         </div>
       </Layout>
     );
   }
 
   // Error state
-  if (channelsError || fetchState.error) {
-    const error = channelsError || fetchState.error;
+  if (channelsError) {
     return (
       <Layout>
-        <ErrorBoundary
-          fallback={
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>
-                Failed to load channels. Please try refreshing the page.
-              </AlertDescription>
-            </Alert>
-          }
-        >
+        <ErrorBoundary fallback={
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              Failed to load channels. Please try refreshing the page.
+            </AlertDescription>
+          </Alert>
+        }>
           <div className="max-w-6xl mx-auto p-4">
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>
-                Error loading channels: {error?.message}
-                {fetchState.retryCount > 0 && ` (Retry attempt ${fetchState.retryCount}/${RETRY_COUNT})`}
+                {channelsError.message}
               </AlertDescription>
             </Alert>
-            <Button 
-              className="mt-4"
-              onClick={() => mutate('/api/channels')}
-            >
-              Retry
-            </Button>
           </div>
         </ErrorBoundary>
       </Layout>
@@ -239,135 +208,187 @@ export function Channels() {
 
   return (
     <Layout>
-      <ErrorBoundary
-        fallback={
-          <Alert variant="destructive">
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription>
-              Failed to load channels. Please try refreshing the page.
-            </AlertDescription>
-          </Alert>
-        }
-      >
-        <div className="max-w-6xl mx-auto p-4">
-          <div className="flex justify-between items-center mb-6">
-            <h1 className="text-2xl font-bold">Voice Channels</h1>
-            {user && (
-              <Dialog>
-                <DialogTrigger asChild>
-                  <Button>
-                    <Plus className="h-4 w-4 mr-2" />
-                    New Channel
+      <div className="max-w-6xl mx-auto p-4">
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-2xl font-bold">Voice Communities</h1>
+          {user && (
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button>
+                  <Plus className="h-4 w-4 mr-2" />
+                  New Community
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Create New Community</DialogTitle>
+                </DialogHeader>
+                <form onSubmit={createChannel} className="space-y-4">
+                  <div>
+                    <Input
+                      placeholder="Community Name"
+                      name="name"
+                      required
+                      minLength={3}
+                      maxLength={50}
+                    />
+                  </div>
+                  <div>
+                    <Textarea
+                      placeholder="Community Description"
+                      name="description"
+                      required
+                      minLength={10}
+                      maxLength={200}
+                    />
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      id="is_private"
+                      name="is_private"
+                      value="true"
+                    />
+                    <label htmlFor="is_private">Private Community</label>
+                  </div>
+                  <Button type="submit" className="w-full" disabled={isCreating}>
+                    {isCreating ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      'Create Community'
+                    )}
                   </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Create New Channel</DialogTitle>
-                  </DialogHeader>
-                  <form onSubmit={createChannel} className="space-y-4">
+                </form>
+              </DialogContent>
+            </Dialog>
+          )}
+        </div>
+
+        <div className="grid md:grid-cols-[300px,1fr] gap-6">
+          <div className="space-y-4">
+            {channels?.length ? (
+              channels.map((channel) => (
+                <Card
+                  key={channel.id}
+                  className={`p-4 cursor-pointer transition-colors hover:bg-accent/50 ${
+                    selectedChannel === channel.id ? 'bg-accent' : ''
+                  }`}
+                  onClick={() => setSelectedChannel(channel.id)}
+                >
+                  <div className="flex justify-between items-start">
                     <div>
-                      <Input
-                        placeholder="Channel Name"
-                        name="name"
-                        required
-                        minLength={3}
-                        maxLength={50}
-                      />
+                      <h3 className="font-semibold">{channel.name}</h3>
+                      <p className="text-sm text-muted-foreground">
+                        {channel.description}
+                      </p>
                     </div>
-                    <div>
-                      <Textarea
-                        placeholder="Channel Description"
-                        name="description"
-                        required
-                        minLength={10}
-                        maxLength={200}
-                      />
+                    {user && (
+                      <Button
+                        variant={channel.isSubscribed ? "secondary" : "default"}
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSubscribe(channel.id);
+                        }}
+                      >
+                        {channel.isSubscribed ? 'Joined' : 'Join'}
+                      </Button>
+                    )}
+                  </div>
+                  <div className="mt-2 flex items-center space-x-4 text-sm text-muted-foreground">
+                    <div className="flex items-center">
+                      <Users className="h-4 w-4 mr-1" />
+                      {channel.subscriber_count || 0}
                     </div>
-                    <Button type="submit" className="w-full" disabled={isCreating}>
-                      {isCreating ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Creating...
-                        </>
-                      ) : (
-                        'Create Channel'
-                      )}
-                    </Button>
-                  </form>
-                </DialogContent>
-              </Dialog>
+                    {channel.is_private && (
+                      <div className="flex items-center">
+                        <Lock className="h-4 w-4 mr-1" />
+                        Private
+                      </div>
+                    )}
+                    {channel.isModerator && (
+                      <Badge variant="outline">Moderator</Badge>
+                    )}
+                  </div>
+                </Card>
+              ))
+            ) : (
+              <div className="text-center p-8 border-2 border-dashed rounded-lg">
+                <p className="text-muted-foreground">
+                  No communities available
+                </p>
+                {user && (
+                  <p className="text-sm text-muted-foreground mt-2">
+                    Create a new community to get started
+                  </p>
+                )}
+              </div>
             )}
           </div>
 
-          <div className="grid md:grid-cols-[300px,1fr] gap-6">
-            <div className="space-y-4">
-              {channels?.length ? (
-                channels.map((channel) => (
-                  <Card
-                    key={channel.id}
-                    className={`p-4 cursor-pointer transition-colors hover:bg-accent/50 ${
-                      selectedChannel === channel.id ? 'bg-accent' : ''
-                    }`}
-                    onClick={() => setSelectedChannel(channel.id)}
-                  >
-                    <h3 className="font-semibold">{channel.name}</h3>
-                    <p className="text-sm text-muted-foreground">
-                      {channel.description}
-                    </p>
-                  </Card>
-                ))
-              ) : (
-                <div className="text-center p-8 border-2 border-dashed rounded-lg">
-                  <p className="text-muted-foreground">
-                    No channels available
-                  </p>
-                  {user && (
-                    <p className="text-sm text-muted-foreground mt-2">
-                      Create a new channel to get started
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-4">
-              {selectedChannel ? (
-                postsError ? (
-                  <Alert variant="destructive">
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertDescription>
-                      Error loading posts: {postsError.message}
-                    </AlertDescription>
-                  </Alert>
-                ) : channelPosts?.length ? (
+          <div className="space-y-4">
+            {selectedChannel ? (
+              <>
+                {channelPosts?.length ? (
                   channelPosts.map((post) => (
                     <Card key={post.id} className="p-4">
+                      <div className="mb-2">
+                        {post.flair && (
+                          <Badge className="mr-2" variant="secondary">
+                            {post.flair}
+                          </Badge>
+                        )}
+                        {post.is_pinned && (
+                          <Badge className="mr-2" variant="outline">
+                            <Pin className="h-3 w-3 mr-1" />
+                            Pinned
+                          </Badge>
+                        )}
+                        <h3 className="text-lg font-semibold mt-1">
+                          {post.title}
+                        </h3>
+                      </div>
                       <VoicePost post={post} />
+                      <div className="mt-2 flex items-center space-x-4 text-sm text-muted-foreground">
+                        <div className="flex items-center">
+                          <Eye className="h-4 w-4 mr-1" />
+                          {post.view_count || 0} views
+                        </div>
+                        {post.tags?.length > 0 && (
+                          <div className="flex items-center">
+                            <Tag className="h-4 w-4 mr-1" />
+                            {post.tags.join(', ')}
+                          </div>
+                        )}
+                      </div>
                     </Card>
                   ))
                 ) : (
                   <div className="text-center p-8 border-2 border-dashed rounded-lg">
                     <p className="text-muted-foreground">
-                      No posts in this channel yet
+                      No posts in this community yet
                     </p>
                     {user && (
                       <p className="text-sm text-muted-foreground mt-2">
-                        Be the first to post in this channel
+                        Be the first to post in this community
                       </p>
                     )}
                   </div>
-                )
-              ) : (
-                <div className="text-center p-8 border-2 border-dashed rounded-lg">
-                  <p className="text-muted-foreground">
-                    Select a channel to view posts
-                  </p>
-                </div>
-              )}
-            </div>
+                )}
+              </>
+            ) : (
+              <div className="text-center p-8 border-2 border-dashed rounded-lg">
+                <p className="text-muted-foreground">
+                  Select a community to view posts
+                </p>
+              </div>
+            )}
           </div>
         </div>
-      </ErrorBoundary>
+      </div>
     </Layout>
   );
 }

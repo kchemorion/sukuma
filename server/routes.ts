@@ -2,10 +2,9 @@ import express, { type Express } from "express";
 import { setupAuth } from "./auth";
 import multer from "multer";
 import { db } from "db";
-import { posts, channels, guest_preferences } from "db/schema";
-import { eq } from "drizzle-orm";
+import { posts, channels, guest_preferences, channel_subscribers, users } from "db/schema";
+import { eq, and, sql } from "drizzle-orm";
 import path from "path";
-import { sql } from "drizzle-orm";
 import { awardPoints, POINTS } from "./points";
 
 // Configure timeout for database queries (30 seconds)
@@ -47,22 +46,327 @@ export function registerRoutes(app: Express) {
     console.log('[API] Starting channels fetch request');
     
     try {
-      // Optimize query with proper ordering and limit
       const allChannels = await withTimeout(
-        db.select()
-          .from(channels)
-          .orderBy(sql`channels.created_at DESC`)
-          .limit(100)
+        db.select({
+          ...channels,
+          subscriber_count: sql`(SELECT COUNT(*) FROM ${channel_subscribers} WHERE channel_id = ${channels.id})`
+        })
+        .from(channels)
+        .orderBy(sql`channels.created_at DESC`)
+        .limit(100)
       );
       
       const duration = Date.now() - startTime;
-      console.log(`[API] Successfully fetched ${allChannels.length} channels in ${duration}ms`, {
+      console.log(`[API] Successfully fetched ${allChannels.length} channels`, {
         queryDuration: duration,
         channelCount: allChannels.length,
         timestamp: new Date().toISOString()
       });
       
       res.json(allChannels);
+    } catch (error) {
+      console.error('[API] Error fetching channels:', error);
+      res.status(500).json({ error: "Failed to fetch channels" });
+    }
+  });
+
+  // Subscribe to channel
+  app.post("/api/channels/:channelId/subscribe", async (req: any, res) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const channelId = parseInt(req.params.channelId);
+      await db.insert(channel_subscribers).values({
+        channel_id: channelId,
+        user_id: req.user.id
+      });
+      
+      // Update subscriber count
+      await db.execute(sql`
+        UPDATE channels 
+        SET subscriber_count = (
+          SELECT COUNT(*) FROM channel_subscribers 
+          WHERE channel_id = ${channelId}
+        )
+        WHERE id = ${channelId}
+      `);
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('[API] Error subscribing to channel:', error);
+      res.status(500).json({ error: "Failed to subscribe to channel" });
+    }
+  });
+
+  // Unsubscribe from channel
+  app.delete("/api/channels/:channelId/subscribe", async (req: any, res) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const channelId = parseInt(req.params.channelId);
+      await db.delete(channel_subscribers)
+        .where(and(
+          eq(channel_subscribers.channel_id, channelId),
+          eq(channel_subscribers.user_id, req.user.id)
+        ));
+
+      // Update subscriber count
+      await db.execute(sql`
+        UPDATE channels 
+        SET subscriber_count = (
+          SELECT COUNT(*) FROM channel_subscribers 
+          WHERE channel_id = ${channelId}
+        )
+        WHERE id = ${channelId}
+      `);
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('[API] Error unsubscribing from channel:', error);
+      res.status(500).json({ error: "Failed to unsubscribe from channel" });
+    }
+  });
+
+  // Get channel flairs
+  app.get("/api/channels/:channelId/flairs", async (req, res) => {
+    try {
+      const channelId = parseInt(req.params.channelId);
+      const [channel] = await db.select({
+        available_flairs: channels.available_flairs
+      })
+      .from(channels)
+      .where(eq(channels.id, channelId))
+      .limit(1);
+
+      res.json(channel?.available_flairs || []);
+    } catch (error) {
+      console.error('[API] Error fetching channel flairs:', error);
+      res.status(500).json({ error: "Failed to fetch channel flairs" });
+    }
+  });
+
+  // Update channel settings (moderators only)
+  app.patch("/api/channels/:channelId", async (req: any, res) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const channelId = parseInt(req.params.channelId);
+      const [channel] = await db.select()
+        .from(channels)
+        .where(eq(channels.id, channelId))
+        .limit(1);
+
+      if (!channel) {
+        return res.status(404).json({ error: "Channel not found" });
+      }
+
+      // Check if user is moderator
+      if (!channel.moderators?.includes(req.user.id)) {
+        return res.status(403).json({ error: "Not a moderator" });
+      }
+
+      const updates: Partial<typeof channels.$inferSelect> = {};
+      if (req.body.rules) updates.rules = req.body.rules;
+      if (req.body.available_flairs) updates.available_flairs = req.body.available_flairs;
+      if (req.body.banner_url) updates.banner_url = req.body.banner_url;
+      if (req.body.theme_color) updates.theme_color = req.body.theme_color;
+      if (req.body.is_private !== undefined) updates.is_private = req.body.is_private;
+
+      await db.update(channels)
+        .set(updates)
+        .where(eq(channels.id, channelId));
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('[API] Error updating channel:', error);
+      res.status(500).json({ error: "Failed to update channel" });
+    }
+  });
+
+  // Create new post with improved features
+  app.post("/api/posts", upload.single('audio'), async (req: any, res) => {
+    if (!req.user || !req.file) {
+      return res.status(400).json({ error: "Missing user or audio file" });
+    }
+
+    try {
+      const channelId = req.body.channel_id ? parseInt(req.body.channel_id) : null;
+      const parentId = req.body.parent_id ? parseInt(req.body.parent_id) : null;
+      
+      // Verify channel exists and user can post
+      if (channelId) {
+        const [channel] = await db.select()
+          .from(channels)
+          .where(eq(channels.id, channelId))
+          .limit(1);
+
+        if (!channel) {
+          return res.status(400).json({ error: "Channel does not exist" });
+        }
+
+        if (channel.is_private) {
+          // Check if user is subscribed
+          const [subscription] = await db.select()
+            .from(channel_subscribers)
+            .where(and(
+              eq(channel_subscribers.channel_id, channelId),
+              eq(channel_subscribers.user_id, req.user.id)
+            ))
+            .limit(1);
+
+          if (!subscription) {
+            return res.status(403).json({ error: "Must be subscribed to post" });
+          }
+        }
+      }
+
+      const [post] = await db.insert(posts)
+        .values({
+          user_id: req.user.id,
+          username: req.user.username,
+          title: req.body.title,
+          audio_url: `/uploads/${req.file.filename}`,
+          duration: parseInt(req.body.duration),
+          channel_id: channelId,
+          parent_id: parentId,
+          flair: req.body.flair,
+          tags: req.body.tags ? JSON.parse(req.body.tags) : [],
+          likes: [],
+          view_count: 0
+        })
+        .returning();
+
+      await awardPoints(req.user.id, POINTS.CREATE_POST);
+
+      res.json(post);
+    } catch (error) {
+      console.error('[API] Error creating post:', error);
+      res.status(500).json({ error: "Failed to create post" });
+    }
+  });
+
+  // Increment view count
+  app.post("/api/posts/:postId/view", async (req, res) => {
+    try {
+      const postId = parseInt(req.params.postId);
+      await db.execute(sql`
+        UPDATE posts 
+        SET view_count = view_count + 1 
+        WHERE id = ${postId}
+      `);
+      res.json({ success: true });
+    } catch (error) {
+      console.error('[API] Error incrementing view count:', error);
+      res.status(500).json({ error: "Failed to increment view count" });
+    }
+  });
+
+  // Pin/unpin post (moderators only)
+  app.patch("/api/posts/:postId/pin", async (req: any, res) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const postId = parseInt(req.params.postId);
+      const [post] = await db.select({
+        id: posts.id,
+        channel_id: posts.channel_id
+      })
+      .from(posts)
+      .where(eq(posts.id, postId))
+      .limit(1);
+
+      if (!post?.channel_id) {
+        return res.status(404).json({ error: "Post not found" });
+      }
+
+      // Check if user is channel moderator
+      const [channel] = await db.select()
+        .from(channels)
+        .where(eq(channels.id, post.channel_id))
+        .limit(1);
+
+      if (!channel?.moderators?.includes(req.user.id)) {
+        return res.status(403).json({ error: "Not a moderator" });
+      }
+
+      await db.update(posts)
+        .set({ is_pinned: req.body.pinned })
+        .where(eq(posts.id, postId));
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('[API] Error updating pin status:', error);
+      res.status(500).json({ error: "Failed to update pin status" });
+    }
+  });
+
+  // Lock/unlock post (moderators only)
+  app.patch("/api/posts/:postId/lock", async (req: any, res) => {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const postId = parseInt(req.params.postId);
+      const [post] = await db.select({
+        id: posts.id,
+        channel_id: posts.channel_id
+      })
+      .from(posts)
+      .where(eq(posts.id, postId))
+      .limit(1);
+
+      if (!post?.channel_id) {
+        return res.status(404).json({ error: "Post not found" });
+      }
+
+      // Check if user is channel moderator
+      const [channel] = await db.select()
+        .from(channels)
+        .where(eq(channels.id, post.channel_id))
+        .limit(1);
+
+      if (!channel?.moderators?.includes(req.user.id)) {
+        return res.status(403).json({ error: "Not a moderator" });
+      }
+
+      await db.update(posts)
+        .set({ is_locked: req.body.locked })
+        .where(eq(posts.id, postId));
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('[API] Error updating lock status:', error);
+      res.status(500).json({ error: "Failed to update lock status" });
+    }
+  });
+
+  // Get all posts
+  app.get("/api/posts", async (req, res) => {
+    const startTime = Date.now();
+    try {
+      console.log(`[API] Fetching all posts`);
+      const allPosts = await withTimeout(
+        db.select()
+          .from(posts)
+          .orderBy(sql`posts.created_at DESC`)
+          .limit(50)
+      );
+      const duration = Date.now() - startTime;
+      console.log(`[API] Successfully fetched ${allPosts.length} posts`, {
+        queryDuration: duration,
+        postsCount: allPosts.length,
+        timestamp: new Date().toISOString()
+      });
+      res.json(allPosts);
     } catch (error) {
       const errorDetails = {
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -71,87 +375,105 @@ export function registerRoutes(app: Express) {
         queryDuration: Date.now() - startTime
       };
 
-      console.error('[API] Error fetching channels:', errorDetails);
+      console.error('[API] Error fetching all posts:', errorDetails);
 
-      const statusCode = error instanceof Error && error.message.includes('timed out') 
+      const statusCode = error instanceof Error && error.message.includes('timed out')
         ? 504 // Gateway Timeout
         : 500; // Internal Server Error
 
       res.status(statusCode).json({ 
-        error: "Failed to fetch channels",
+        error: "Failed to fetch all posts",
         details: errorDetails.error,
         timestamp: errorDetails.timestamp
       });
     }
   });
 
-  app.post("/api/channels", async (req: any, res) => {
-    if (!req.user) {
-      console.warn('[API] Unauthorized attempt to create channel');
-      return res.status(401).json({ 
-        error: "Unauthorized",
-        details: "You must be logged in to create a channel"
-      });
-    }
-
+  // Get posts by flair
+  app.get("/api/posts/flair/:flair", async (req, res) => {
+    const startTime = Date.now();
     try {
-      console.log('[API] Creating new channel:', {
-        name: req.body.name,
-        userId: req.user.id,
+      console.log(`[API] Fetching posts with flair: ${req.params.flair}`);
+      const flair = req.params.flair;
+      const allPosts = await withTimeout(
+        db.select()
+          .from(posts)
+          .where(eq(posts.flair, flair))
+          .orderBy(sql`posts.created_at DESC`)
+          .limit(50)
+      );
+      const duration = Date.now() - startTime;
+      console.log(`[API] Successfully fetched ${allPosts.length} posts`, {
+        queryDuration: duration,
+        postsCount: allPosts.length,
         timestamp: new Date().toISOString()
       });
-      
-      if (!req.body.name || !req.body.description) {
-        return res.status(400).json({ 
-          error: "Missing required fields",
-          details: "Name and description are required"
-        });
-      }
-
-      const [channel] = await db
-        .insert(channels)
-        .values({
-          name: req.body.name,
-          description: req.body.description,
-          created_by: req.user.id,
-        })
-        .returning();
-
-      // Award points for creating a channel
-      await awardPoints(req.user.id, POINTS.CREATE_CHANNEL);
-
-      console.log('[API] Successfully created channel:', {
-        channelId: channel.id,
-        name: channel.name,
-        userId: req.user.id,
-        timestamp: new Date().toISOString()
-      });
-      
-      res.json(channel);
+      res.json(allPosts);
     } catch (error) {
-      console.error('[API] Error creating channel:', {
+      const errorDetails = {
         error: error instanceof Error ? error.message : 'Unknown error',
         stack: error instanceof Error ? error.stack : undefined,
-        requestBody: req.body,
-        userId: req.user.id,
-        timestamp: new Date().toISOString()
-      });
-      
-      if (error instanceof Error && error.message.includes('unique constraint')) {
-        return res.status(400).json({ 
-          error: "Channel name already exists",
-          details: "Please choose a different name"
-        });
-      }
+        timestamp: new Date().toISOString(),
+        queryDuration: Date.now() - startTime
+      };
 
-      res.status(500).json({ 
-        error: "Failed to create channel",
-        details: error instanceof Error ? error.message : 'Unknown error',
-        timestamp: new Date().toISOString()
+      console.error('[API] Error fetching posts with flair:', errorDetails);
+
+      const statusCode = error instanceof Error && error.message.includes('timed out')
+        ? 504 // Gateway Timeout
+        : 500; // Internal Server Error
+
+      res.status(statusCode).json({ 
+        error: "Failed to fetch posts with flair",
+        details: errorDetails.error,
+        timestamp: errorDetails.timestamp
       });
     }
   });
 
+  // Get posts by tag
+  app.get("/api/posts/tag/:tag", async (req, res) => {
+    const startTime = Date.now();
+    try {
+      console.log(`[API] Fetching posts with tag: ${req.params.tag}`);
+      const tag = req.params.tag;
+      const allPosts = await withTimeout(
+        db.select()
+          .from(posts)
+          .where(sql`posts.tags @> ARRAY[${tag}]`)
+          .orderBy(sql`posts.created_at DESC`)
+          .limit(50)
+      );
+      const duration = Date.now() - startTime;
+      console.log(`[API] Successfully fetched ${allPosts.length} posts`, {
+        queryDuration: duration,
+        postsCount: allPosts.length,
+        timestamp: new Date().toISOString()
+      });
+      res.json(allPosts);
+    } catch (error) {
+      const errorDetails = {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        timestamp: new Date().toISOString(),
+        queryDuration: Date.now() - startTime
+      };
+
+      console.error('[API] Error fetching posts with tag:', errorDetails);
+
+      const statusCode = error instanceof Error && error.message.includes('timed out')
+        ? 504 // Gateway Timeout
+        : 500; // Internal Server Error
+
+      res.status(statusCode).json({ 
+        error: "Failed to fetch posts with tag",
+        details: errorDetails.error,
+        timestamp: errorDetails.timestamp
+      });
+    }
+  });
+
+  // Get posts by channel
   app.get("/api/channels/:channelId/posts", async (req, res) => {
     const startTime = Date.now();
     try {
