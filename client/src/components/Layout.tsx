@@ -1,6 +1,7 @@
 import { Link, useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { useUser } from '../hooks/use-user';
+import { useToast } from '../hooks/use-toast';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,11 +14,34 @@ import { Leaf, LogOut, User, Radio } from 'lucide-react';
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useUser();
   const [, setLocation] = useLocation();
+  const { toast } = useToast();
 
   const handleLogout = async () => {
-    const result = await logout();
-    if (result.ok) {
-      setLocation('/login');
+    try {
+      const result = await logout();
+      if (result.ok) {
+        // Show success message
+        toast({
+          title: "Success",
+          description: "Logged out successfully",
+        });
+        // Redirect after successful logout
+        setLocation('/login');
+      } else {
+        // Show error message
+        toast({
+          title: "Error",
+          description: result.message || "Failed to logout",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error('[Auth] Logout error:', error);
+      toast({
+        title: "Error",
+        description: "An unexpected error occurred during logout",
+        variant: "destructive",
+      });
     }
   };
 

@@ -44,6 +44,7 @@ export function useUser() {
 
       if (!response.ok) {
         if (response.status === 401) {
+          // Clear user data on authentication failure
           await mutate(undefined, { revalidate: false });
         }
         return { 
@@ -52,7 +53,8 @@ export function useUser() {
         };
       }
 
-      await mutate();
+      // Update local data after successful request
+      await mutate(data.user || undefined, { revalidate: true });
       return { ok: true, data };
     } catch (e) {
       console.error('[Auth] Network error:', e);
@@ -72,11 +74,23 @@ export function useUser() {
   };
 
   const logout = async () => {
-    const result = await handleAuthRequest("/logout", "POST");
-    if (result.ok) {
-      await mutate(undefined, { revalidate: false });
+    try {
+      const result = await handleAuthRequest("/logout", "POST");
+      if (result.ok) {
+        // Ensure proper cleanup of user data
+        await mutate(undefined, { 
+          revalidate: false,
+          rollbackOnError: true
+        });
+      }
+      return result;
+    } catch (error) {
+      console.error('[Auth] Logout error:', error);
+      return {
+        ok: false,
+        message: error instanceof Error ? error.message : 'Logout failed'
+      };
     }
-    return result;
   };
 
   const register = async (user: InsertUser) => {
