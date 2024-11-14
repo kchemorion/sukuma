@@ -7,7 +7,7 @@ export function useUser() {
     shouldRetryOnError: false,
     revalidateOnReconnect: true,
     refreshInterval: 0,
-    dedupingInterval: 60000, // 1 minute deduping interval
+    dedupingInterval: 30000,
     errorRetryCount: 2,
     onError: (err) => {
       // Only log actual errors, not expected 401s for non-authenticated users
