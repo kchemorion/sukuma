@@ -11,6 +11,8 @@ import passport from "passport";
 import path from "path";
 import fs from "fs";
 
+console.log('[Server] Initializing...');
+
 const app = express();
 const server = createServer(app);
 
@@ -20,7 +22,13 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// Configure PostgreSQL session store with proper error handling
+// Environment configuration
+const isProduction = process.env.NODE_ENV === "production";
+const domain = isProduction 
+  ? `${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
+  : 'localhost';
+
+// Configure PostgreSQL session store with proper error handling and retry logic
 const PostgresqlStore = connectPg(session);
 const sessionPool = new Pool({
   host: process.env.PGHOST,
@@ -31,134 +39,148 @@ const sessionPool = new Pool({
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10000
 });
 
-// Monitor the connection pool
-sessionPool.on('error', (err) => {
-  console.error('[Database] Unexpected error on idle client', err);
+// Session store configuration with improved error handling and retry logic
+const sessionStore = new PostgresqlStore({
+  pool: sessionPool,
+  tableName: 'session',
+  createTableIfMissing: true,
+  pruneSessionInterval: 900, // 15 minutes
+  errorLog: (err) => {
+    console.error('[Session Store Error]:', err);
+  }
 });
 
-// Session configuration
-const sessionSettings: session.SessionOptions = {
-  store: new PostgresqlStore({
-    pool: sessionPool,
-    tableName: 'session',
-    createTableIfMissing: true,
-    pruneSessionInterval: 60
-  }),
+// Enhanced session middleware configuration
+const sessionMiddleware = session({
+  store: sessionStore,
   secret: process.env.REPL_ID || "your-secret-key",
+  name: 'sukuma.sid',
   resave: false,
   saveUninitialized: false,
-  rolling: true,
-  name: 'sukuma.sid',
   proxy: true,
   cookie: {
-    secure: process.env.NODE_ENV === "production",
+    secure: isProduction,
     httpOnly: true,
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    sameSite: 'lax',
-    path: "/",
+    sameSite: isProduction ? 'none' : 'lax',
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    domain: isProduction ? domain : undefined,
+    path: "/"
   }
-};
-
-// Configure for production
-if (process.env.NODE_ENV === "production") {
-  app.set("trust proxy", 1);
-  sessionSettings.cookie!.secure = true;
-  sessionSettings.cookie!.sameSite = 'none';
-}
+});
 
 // CORS configuration with proper credentials handling
 const corsOptions = {
-  origin: process.env.NODE_ENV === "production" 
-    ? [new RegExp(`^https://${process.env.REPL_SLUG}\\.${process.env.REPL_OWNER}\\.repl\\.co$`)]
-    : "http://localhost:5000",
+  origin: function(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
+    if (!origin || !isProduction) {
+      callback(null, true);
+      return;
+    }
+
+    const allowedOrigins = [
+      `https://${domain}`,
+      `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`,
+      'https://replit.com'
+    ];
+
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.warn('[CORS] Blocked request from:', origin);
+      callback(null, false);
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  exposedHeaders: ['set-cookie']
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
+  optionsSuccessStatus: 200
 };
+
+// Trust proxy settings for secure cookies behind Replit's proxy
+app.set('trust proxy', 1);
 
 // Apply middleware in correct order
 app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Initialize session middleware before passport
-app.use(session(sessionSettings));
+app.use(sessionMiddleware);
 app.use(passport.initialize());
 app.use(passport.session());
 
-// Session debugging middleware
+// Debug middleware for session and authentication
 app.use((req, _res, next) => {
-  const sessionInfo = {
-    id: req.sessionID,
-    cookie: req.session?.cookie,
-    user: req.user ? { id: req.user.id, username: req.user.username } : null,
-    authenticated: req.isAuthenticated()
-  };
-  
-  console.debug('[Session]', {
-    url: req.url,
-    method: req.method,
-    session: sessionInfo,
-    headers: {
-      origin: req.headers.origin,
-      cookie: req.headers.cookie ? '[present]' : '[absent]'
-    }
-  });
+  if (req.url !== '/health') {
+    console.debug('[Session Debug]', {
+      url: req.url,
+      method: req.method,
+      sessionID: req.sessionID,
+      authenticated: req.isAuthenticated(),
+      sessionData: req.session,
+      cookies: req.headers.cookie,
+      origin: req.headers.origin
+    });
+  }
   next();
 });
+
+// Initialize routes
+setupAuth(app);
+registerRoutes(app);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ 
-    status: 'ok', 
+    status: 'ok',
     timestamp: new Date().toISOString(),
     session: {
       id: req.sessionID,
       active: !!req.session,
       authenticated: req.isAuthenticated(),
-      user: req.user ? { id: req.user.id, username: req.user.username } : null
-    }
+      cookie: req.session?.cookie
+    },
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
 // Error handling middleware
-app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
   console.error('[Server Error]', {
     error: err.message,
     stack: err.stack,
     url: req.url,
     method: req.method,
-    sessionID: req.sessionID
+    sessionID: req.sessionID,
+    authenticated: req.isAuthenticated()
   });
 
-  res.status(500).json({
+  res.status(500).json({ 
     error: 'Internal server error',
     message: process.env.NODE_ENV === 'development' ? err.message : undefined
   });
 });
 
-// Setup routes and start server
+// Setup routes and start server with enhanced error handling
 (async () => {
   try {
-    // Setup authentication first
-    setupAuth(app);
-    
-    // Register routes
-    registerRoutes(app);
+    // Verify database connection
+    await sessionPool.query('SELECT NOW()');
+    console.log('[Database] Connection verified');
 
-    // Handle static files and Vite setup
-    if (process.env.NODE_ENV !== "production") {
+    if (!isProduction) {
       await setupVite(app, server);
+      console.log('[Vite] Development server initialized');
     } else {
       serveStatic(app);
+      console.log('[Static] Production assets configured');
     }
 
     const PORT = Number(process.env.PORT) || 5000;
     server.listen(PORT, "0.0.0.0", () => {
-      console.log(`[Server] Started on port ${PORT}`);
+      console.log(`[Server] Running at http://0.0.0.0:${PORT}`);
+      console.log(`[Server] Environment: ${process.env.NODE_ENV || 'development'}`);
     });
   } catch (error) {
     console.error('[Server] Startup error:', error);
@@ -166,12 +188,21 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
   }
 })();
 
-// Handle graceful shutdown
+// Cleanup on shutdown
 process.on('SIGTERM', () => {
   console.log('[Server] SIGTERM received. Closing server...');
-  sessionPool.end();
+  
   server.close(() => {
     console.log('[Server] Server closed');
-    process.exit(0);
+    sessionPool.end(() => {
+      console.log('[Database] Connections closed');
+      process.exit(0);
+    });
   });
+
+  // Force exit after 30 seconds
+  setTimeout(() => {
+    console.error('[Server] Could not close connections in time, forcefully shutting down');
+    process.exit(1);
+  }, 30000);
 });

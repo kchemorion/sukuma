@@ -5,11 +5,14 @@ export function useUser() {
   const { data, error, mutate } = useSWR<User>("/api/user", {
     revalidateOnFocus: false,
     shouldRetryOnError: false,
-    revalidateOnReconnect: false,
-    dedupingInterval: 5000,
+    revalidateOnReconnect: true,
+    refreshInterval: 0,
+    dedupingInterval: 60000, // 1 minute deduping interval
+    errorRetryCount: 2,
     onError: (err) => {
-      if (err?.status === 401) {
-        mutate(undefined, { revalidate: false });
+      // Only log actual errors, not expected 401s for non-authenticated users
+      if (err.status !== 401) {
+        console.error('[Auth] Error fetching user:', err);
       }
     }
   });
@@ -20,25 +23,20 @@ export function useUser() {
     body?: InsertUser
   ): Promise<RequestResult> => {
     try {
-      console.log('[Auth] Making request:', { url, method });
-      
       const response = await fetch(url, {
         method,
         headers: {
-          ...(body ? { 'Content-Type': 'application/json' } : {}),
-          'Accept': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
         },
         body: body ? JSON.stringify(body) : undefined,
         credentials: 'include'
       });
 
-      const contentType = response.headers.get('content-type');
-      let data = null;
-      
+      let data;
       try {
-        if (contentType?.includes('application/json')) {
-          data = await response.json();
-        }
+        data = await response.json();
       } catch (e) {
         console.warn('[Auth] Failed to parse JSON response:', e);
       }
@@ -49,6 +47,12 @@ export function useUser() {
           url,
           data
         });
+
+        // Special handling for 401s
+        if (response.status === 401) {
+          await mutate(undefined, { revalidate: false });
+        }
+
         return { 
           ok: false, 
           message: data?.message || `Authentication failed: ${response.statusText}`
@@ -68,7 +72,6 @@ export function useUser() {
   const login = async (user: InsertUser) => {
     const result = await handleAuthRequest("/login", "POST", user);
     if (result.ok) {
-      // Force immediate revalidation after login
       await mutate();
     }
     return result;
@@ -77,7 +80,6 @@ export function useUser() {
   const logout = async () => {
     const result = await handleAuthRequest("/logout", "POST");
     if (result.ok) {
-      // Clear user data immediately on logout
       await mutate(undefined, { revalidate: false });
     }
     return result;
@@ -86,7 +88,6 @@ export function useUser() {
   const register = async (user: InsertUser) => {
     const result = await handleAuthRequest("/register", "POST", user);
     if (result.ok) {
-      // Force immediate revalidation after registration
       await mutate();
     }
     return result;
@@ -95,6 +96,7 @@ export function useUser() {
   return {
     user: data,
     isLoading: !error && !data,
+    isError: error && error.status !== 401,
     error,
     login,
     logout,
