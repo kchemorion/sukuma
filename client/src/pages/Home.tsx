@@ -9,10 +9,12 @@ import { useUser } from '../hooks/use-user';
 import useSWR from 'swr';
 import type { Post } from 'db/schema';
 import { Layout } from '@/components/Layout';
+import { LoadingState } from '@/components/LoadingState';
+import { EmptyState } from '@/components/EmptyState';
 
 export function Home() {
   const { user } = useUser();
-  const { data: posts } = useSWR<Post[]>('/api/posts');
+  const { data: posts, error } = useSWR<Post[]>('/api/posts');
   const [currentlyPlaying, setCurrentlyPlaying] = useState<number | null>(null);
   const audioRefs = useRef<Record<number, HTMLAudioElement>>({});
 
@@ -33,7 +35,24 @@ export function Home() {
     }
   }, [currentlyPlaying, posts]);
 
-  if (!posts) return <div>Loading...</div>;
+  if (error) return (
+    <Layout>
+      <div className="max-w-2xl mx-auto p-4">
+        <EmptyState 
+          title="Error Loading Posts"
+          description="There was a problem loading the voice posts. Please try again later."
+        />
+      </div>
+    </Layout>
+  );
+
+  if (!posts) return (
+    <Layout>
+      <div className="max-w-2xl mx-auto p-4">
+        <LoadingState />
+      </div>
+    </Layout>
+  );
 
   return (
     <Layout>
@@ -52,19 +71,26 @@ export function Home() {
         )}
 
         <div className="space-y-4">
-          {posts.map((post) => (
-            <Card key={post.id} className="p-4">
-              <VoicePost
-                post={post}
-                isPlaying={currentlyPlaying === post.id}
-                onPlay={() => setCurrentlyPlaying(post.id)}
-                onPause={() => setCurrentlyPlaying(null)}
-                ref={(el) => {
-                  if (el) audioRefs.current[post.id] = el;
-                }}
-              />
-            </Card>
-          ))}
+          {posts.length > 0 ? (
+            posts.map((post) => (
+              <Card key={post.id} className="p-4">
+                <VoicePost
+                  post={post}
+                  isPlaying={currentlyPlaying === post.id}
+                  onPlay={() => setCurrentlyPlaying(post.id)}
+                  onPause={() => setCurrentlyPlaying(null)}
+                  ref={(el) => {
+                    if (el) audioRefs.current[post.id] = el;
+                  }}
+                />
+              </Card>
+            ))
+          ) : (
+            <EmptyState 
+              title="No Voice Posts Yet"
+              description="Be the first one to share your voice with the community!"
+            />
+          )}
         </div>
       </div>
     </Layout>
