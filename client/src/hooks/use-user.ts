@@ -5,12 +5,10 @@ export function useUser() {
   const { data, error, mutate } = useSWR<User>("/api/user", {
     revalidateOnFocus: false,
     shouldRetryOnError: false,
-    revalidateOnReconnect: true,
+    revalidateOnReconnect: false,
     refreshInterval: 0,
     dedupingInterval: 30000,
-    errorRetryCount: 2,
     onError: (err) => {
-      // Only log actual errors, not expected 401s for non-authenticated users
       if (err.status !== 401) {
         console.error('[Auth] Error fetching user:', err);
       }
@@ -28,53 +26,36 @@ export function useUser() {
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
-          'X-Requested-With': 'XMLHttpRequest'
         },
         body: body ? JSON.stringify(body) : undefined,
         credentials: 'include'
       });
 
-      let data;
-      try {
-        data = await response.json();
-      } catch (e) {
-        console.warn('[Auth] Failed to parse JSON response:', e);
-      }
+      const data = await response.json();
 
       if (!response.ok) {
-        console.warn('[Auth] Request failed:', { 
-          status: response.status,
-          url,
-          data
-        });
-
-        // Special handling for 401s
         if (response.status === 401) {
           await mutate(undefined, { revalidate: false });
         }
-
         return { 
           ok: false, 
-          message: data?.message || `Authentication failed: ${response.statusText}`
+          message: data?.message || `Authentication failed: ${response.statusText}` 
         };
       }
 
+      await mutate();
       return { ok: true, data };
-    } catch (e: any) {
-      console.error('[Auth] Request error:', e);
+    } catch (e) {
+      console.error('[Auth] Network error:', e);
       return { 
         ok: false, 
-        message: e.message || 'Network error occurred'
+        message: e instanceof Error ? e.message : 'Network error occurred'
       };
     }
   };
 
   const login = async (user: InsertUser) => {
-    const result = await handleAuthRequest("/login", "POST", user);
-    if (result.ok) {
-      await mutate();
-    }
-    return result;
+    return handleAuthRequest("/login", "POST", user);
   };
 
   const logout = async () => {
@@ -86,11 +67,7 @@ export function useUser() {
   };
 
   const register = async (user: InsertUser) => {
-    const result = await handleAuthRequest("/register", "POST", user);
-    if (result.ok) {
-      await mutate();
-    }
-    return result;
+    return handleAuthRequest("/register", "POST", user);
   };
 
   return {
