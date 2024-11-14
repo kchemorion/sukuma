@@ -1,4 +1,4 @@
-import { Link } from 'wouter';
+import { Link, useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { useUser } from '../hooks/use-user';
 import { useToast } from '../hooks/use-toast';
@@ -14,6 +14,8 @@ import { Leaf, LogOut, User, Radio } from 'lucide-react';
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useUser();
   const { toast } = useToast();
+  const [location] = useLocation();
+  const isAuthPage = location === '/login' || location === '/register';
 
   const handleLogout = async () => {
     try {
@@ -62,7 +64,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </nav>
           </div>
 
-          {user ? (
+          {!isAuthPage && user ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="relative h-8 w-8 rounded-full">
@@ -87,7 +89,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-          ) : (
+          ) : !isAuthPage ? (
             <div className="space-x-2">
               <Link href="/login">
                 <Button variant="ghost">Login</Button>
@@ -96,7 +98,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 <Button>Register</Button>
               </Link>
             </div>
-          )}
+          ) : null}
         </div>
       </header>
 

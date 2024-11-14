@@ -3,6 +3,7 @@ import type { User, InsertUser } from "db/schema";
 
 interface ExtendedUser extends User {
   isGuest?: boolean;
+  password?: string;
 }
 
 interface GuestPreferences {
@@ -29,7 +30,8 @@ export function useUser() {
             id: 0,
             username: 'Guest',
             points: 0,
-            isGuest: true
+            isGuest: true,
+            password: ''
           }, false);
         }
       } catch (e) {
@@ -38,14 +40,15 @@ export function useUser() {
           id: 0,
           username: 'Guest',
           points: 0,
-          isGuest: true
+          isGuest: true,
+          password: ''
         }, false);
       }
     }
   });
 
   const { data: preferences, mutate: mutatePreferences } = useSWR<GuestPreferences>(
-    user?.isGuest ? "/api/guest-preferences" : null,
+    user?.isGuest && user.username !== 'Guest' ? "/api/guest-preferences" : null,
     {
       revalidateOnFocus: false,
       dedupingInterval: 5000,
@@ -95,10 +98,10 @@ export function useUser() {
   };
 
   const updateGuestPreferences = async (newPreferences: GuestPreferences): Promise<RequestResult> => {
-    if (!user?.isGuest) {
+    if (!user?.isGuest || user.username === 'Guest') {
       return {
         ok: false,
-        message: "Only guest users can update preferences"
+        message: "Only valid guest users can update preferences"
       };
     }
 
@@ -169,7 +172,7 @@ export function useUser() {
   };
 
   return {
-    user: user || { id: 0, username: 'Guest', points: 0, isGuest: true },
+    user: user || { id: 0, username: 'Guest', points: 0, isGuest: true, password: '' },
     preferences: preferences || {},
     isLoading: !error && !user,
     isError: error && error.status !== 401,
