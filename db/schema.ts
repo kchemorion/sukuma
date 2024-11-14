@@ -35,6 +35,10 @@ export const channels = pgTable("channels", {
   is_private: boolean("is_private").default(false),
   available_flairs: jsonb("available_flairs").notNull().default([]),
   moderators: integer("moderators").array(),
+  categories: text("categories").array(),
+  voice_preview_url: text("voice_preview_url"),
+  weekly_activity: integer("weekly_activity").default(0),
+  related_channels: integer("related_channels").array(),
 });
 
 export const channel_subscribers = pgTable("channel_subscribers", {

@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from '@/hooks/use-toast';
 import { 
@@ -26,15 +27,25 @@ import {
   Pin,
   Eye,
   Tag,
-  Award
+  Award,
+  TrendingUp,
+  Compass,
+  Hash
 } from 'lucide-react';
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { Badge } from "@/components/ui/badge";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 
-interface ChannelWithSubscription extends Channel {
+interface ChannelWithSubscription extends Omit<Channel, 'subscriber_count'> {
   isSubscribed?: boolean;
   isModerator?: boolean;
+  subscriber_count?: number;
 }
 
 export function Channels() {
@@ -42,18 +53,13 @@ export function Channels() {
   const { toast } = useToast();
   const [isCreating, setIsCreating] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<number | null>(null);
-  const [channelSettings, setChannelSettings] = useState<{
-    isOpen: boolean;
-    channelId: number | null;
-  }>({
-    isOpen: false,
-    channelId: null,
-  });
+  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'all' | 'trending' | 'recommended' | 'categories'>('all');
 
   // Fetch channels with subscription status
-  const { data: channels, error: channelsError } = useSWR<ChannelWithSubscription[]>(
+  const { data: allChannels, error: channelsError } = useSWR<ChannelWithSubscription[]>(
     '/api/channels',
-    async (url) => {
+    async (url: string) => {
       const response = await fetch(url);
       if (!response.ok) throw new Error('Failed to fetch channels');
       const channels = await response.json();
@@ -63,31 +69,67 @@ export function Channels() {
         const subscriptionsResponse = await fetch(`/api/users/${user.id}/subscriptions`);
         const subscriptions = await subscriptionsResponse.json();
         
-        return channels.map(channel => ({
+        return channels.map((channel: ChannelWithSubscription) => ({
           ...channel,
-          isSubscribed: subscriptions.some((s: any) => s.channel_id === channel.id),
+          isSubscribed: subscriptions.some((s: { channel_id: number }) => s.channel_id === channel.id),
           isModerator: channel.moderators?.includes(user.id)
         }));
       }
       
       return channels;
-    },
-    {
-      revalidateOnFocus: false,
-      dedupingInterval: 5000,
     }
   );
 
+  // Fetch trending channels
+  const { data: trendingChannels } = useSWR<ChannelWithSubscription[]>(
+    '/api/channels/trending',
+    async (url: string) => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Failed to fetch trending channels');
+      return response.json();
+    }
+  );
+
+  // Fetch recommended channels for logged-in users
+  const { data: recommendedChannels } = useSWR<ChannelWithSubscription[]>(
+    user ? '/api/channels/recommended' : null,
+    async (url: string) => {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Failed to fetch recommended channels');
+      return response.json();
+    }
+  );
+
+  // Get unique categories from all channels
+  const categories = Array.from(new Set(
+    allChannels?.flatMap(channel => channel.categories || []) || []
+  )).sort();
+
+  // Filter channels based on view mode and category
+  const displayedChannels = (() => {
+    switch (viewMode) {
+      case 'trending':
+        return trendingChannels || [];
+      case 'recommended':
+        return recommendedChannels || [];
+      case 'categories':
+        return activeCategory
+          ? (allChannels || []).filter(channel => 
+              Array.isArray(channel.categories) && channel.categories.includes(activeCategory)
+            )
+          : [];
+      default:
+        return allChannels || [];
+    }
+  })();
+
+  // Fetch channel posts
   const { data: channelPosts, error: postsError } = useSWR<Post[]>(
     selectedChannel ? `/api/channels/${selectedChannel}/posts` : null,
-    async (url) => {
+    async (url: string) => {
       const response = await fetch(url);
       if (!response.ok) throw new Error('Failed to fetch posts');
       return response.json();
-    },
-    {
-      revalidateOnFocus: false,
-      dedupingInterval: 5000,
     }
   );
 
@@ -102,7 +144,7 @@ export function Channels() {
     }
 
     try {
-      const channel = channels?.find(c => c.id === channelId);
+      const channel = allChannels?.find(c => c.id === channelId);
       const isSubscribed = channel?.isSubscribed;
       
       const response = await fetch(`/api/channels/${channelId}/subscribe`, {
@@ -116,7 +158,7 @@ export function Channels() {
         description: `Successfully ${isSubscribed ? 'unsubscribed from' : 'subscribed to'} channel`,
       });
 
-      mutate('/api/channels'); // Refresh channels
+      mutate('/api/channels');
     } catch (error) {
       console.error('[Channels] Subscription error:', error);
       toast({
@@ -133,6 +175,11 @@ export function Channels() {
     const formData = new FormData(event.currentTarget);
     
     try {
+      const categories = (formData.get('categories') as string || '')
+        .split(',')
+        .map(cat => cat.trim())
+        .filter(Boolean);
+
       const response = await fetch('/api/channels', {
         method: 'POST',
         headers: {
@@ -142,6 +189,7 @@ export function Channels() {
           name: formData.get('name'),
           description: formData.get('description'),
           rules: [],
+          categories,
           is_private: formData.get('is_private') === 'true',
         }),
       });
@@ -171,7 +219,7 @@ export function Channels() {
   };
 
   // Loading state
-  if (!channels && !channelsError) {
+  if (!allChannels && !channelsError) {
     return (
       <Layout>
         <div className="flex items-center justify-center min-h-screen">
@@ -242,6 +290,12 @@ export function Channels() {
                       maxLength={200}
                     />
                   </div>
+                  <div>
+                    <Input
+                      placeholder="Categories (comma-separated)"
+                      name="categories"
+                    />
+                  </div>
                   <div className="flex items-center space-x-2">
                     <input
                       type="checkbox"
@@ -251,143 +305,200 @@ export function Channels() {
                     />
                     <label htmlFor="is_private">Private Community</label>
                   </div>
-                  <Button type="submit" className="w-full" disabled={isCreating}>
-                    {isCreating ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Creating...
-                      </>
-                    ) : (
-                      'Create Community'
-                    )}
-                  </Button>
+                  <DialogFooter>
+                    <Button type="submit" className="w-full" disabled={isCreating}>
+                      {isCreating ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Creating...
+                        </>
+                      ) : (
+                        'Create Community'
+                      )}
+                    </Button>
+                  </DialogFooter>
                 </form>
               </DialogContent>
             </Dialog>
           )}
         </div>
 
-        <div className="grid md:grid-cols-[300px,1fr] gap-6">
-          <div className="space-y-4">
-            {channels?.length ? (
-              channels.map((channel) => (
-                <Card
-                  key={channel.id}
-                  className={`p-4 cursor-pointer transition-colors hover:bg-accent/50 ${
-                    selectedChannel === channel.id ? 'bg-accent' : ''
-                  }`}
-                  onClick={() => setSelectedChannel(channel.id)}
-                >
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h3 className="font-semibold">{channel.name}</h3>
-                      <p className="text-sm text-muted-foreground">
-                        {channel.description}
-                      </p>
-                    </div>
-                    {user && (
-                      <Button
-                        variant={channel.isSubscribed ? "secondary" : "default"}
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleSubscribe(channel.id);
-                        }}
-                      >
-                        {channel.isSubscribed ? 'Joined' : 'Join'}
-                      </Button>
-                    )}
-                  </div>
-                  <div className="mt-2 flex items-center space-x-4 text-sm text-muted-foreground">
-                    <div className="flex items-center">
-                      <Users className="h-4 w-4 mr-1" />
-                      {channel.subscriber_count || 0}
-                    </div>
-                    {channel.is_private && (
-                      <div className="flex items-center">
-                        <Lock className="h-4 w-4 mr-1" />
-                        Private
-                      </div>
-                    )}
-                    {channel.isModerator && (
-                      <Badge variant="outline">Moderator</Badge>
-                    )}
-                  </div>
-                </Card>
-              ))
-            ) : (
-              <div className="text-center p-8 border-2 border-dashed rounded-lg">
-                <p className="text-muted-foreground">
-                  No communities available
-                </p>
-                {user && (
-                  <p className="text-sm text-muted-foreground mt-2">
-                    Create a new community to get started
-                  </p>
-                )}
-              </div>
+        <Tabs value={viewMode} onValueChange={(value: 'all' | 'trending' | 'recommended' | 'categories') => setViewMode(value)}>
+          <TabsList className="mb-4">
+            <TabsTrigger value="all">
+              <Compass className="h-4 w-4 mr-2" />
+              All
+            </TabsTrigger>
+            <TabsTrigger value="trending">
+              <TrendingUp className="h-4 w-4 mr-2" />
+              Trending
+            </TabsTrigger>
+            {user && (
+              <TabsTrigger value="recommended">
+                <Award className="h-4 w-4 mr-2" />
+                Recommended
+              </TabsTrigger>
             )}
-          </div>
+            <TabsTrigger value="categories">
+              <Hash className="h-4 w-4 mr-2" />
+              Categories
+            </TabsTrigger>
+          </TabsList>
 
-          <div className="space-y-4">
-            {selectedChannel ? (
-              <>
-                {channelPosts?.length ? (
-                  channelPosts.map((post) => (
-                    <Card key={post.id} className="p-4">
-                      <div className="mb-2">
-                        {post.flair && (
-                          <Badge className="mr-2" variant="secondary">
-                            {post.flair}
-                          </Badge>
-                        )}
-                        {post.is_pinned && (
-                          <Badge className="mr-2" variant="outline">
-                            <Pin className="h-3 w-3 mr-1" />
-                            Pinned
-                          </Badge>
-                        )}
-                        <h3 className="text-lg font-semibold mt-1">
-                          {post.title}
-                        </h3>
-                      </div>
-                      <VoicePost post={post} />
-                      <div className="mt-2 flex items-center space-x-4 text-sm text-muted-foreground">
-                        <div className="flex items-center">
-                          <Eye className="h-4 w-4 mr-1" />
-                          {post.view_count || 0} views
-                        </div>
-                        {post.tags?.length > 0 && (
-                          <div className="flex items-center">
-                            <Tag className="h-4 w-4 mr-1" />
-                            {post.tags.join(', ')}
+          <div className="grid md:grid-cols-[300px,1fr] gap-6">
+            <div className="space-y-4">
+              {viewMode === 'categories' && categories.length > 0 && (
+                <div className="mb-4 flex flex-wrap gap-2">
+                  {categories.map((category: string) => (
+                    <Badge
+                      key={category}
+                      variant={activeCategory === category ? "default" : "secondary"}
+                      className="cursor-pointer"
+                      onClick={() => setActiveCategory(
+                        activeCategory === category ? null : category
+                      )}
+                    >
+                      {category}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+
+              {displayedChannels?.length ? (
+                displayedChannels.map((channel) => (
+                  <Card
+                    key={channel.id}
+                    className={`p-4 cursor-pointer transition-colors hover:bg-accent/50 ${
+                      selectedChannel === channel.id ? 'bg-accent' : ''
+                    }`}
+                    onClick={() => setSelectedChannel(channel.id)}
+                  >
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <h3 className="font-semibold">{channel.name}</h3>
+                        <p className="text-sm text-muted-foreground">
+                          {channel.description}
+                        </p>
+                        {Array.isArray(channel.categories) && channel.categories.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {channel.categories.map((category: string) => (
+                              <Badge key={category} variant="outline" className="text-xs">
+                                {category}
+                              </Badge>
+                            ))}
                           </div>
                         )}
                       </div>
-                    </Card>
-                  ))
-                ) : (
-                  <div className="text-center p-8 border-2 border-dashed rounded-lg">
-                    <p className="text-muted-foreground">
-                      No posts in this community yet
+                      {user && (
+                        <Button
+                          variant={channel.isSubscribed ? "secondary" : "default"}
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSubscribe(channel.id);
+                          }}
+                        >
+                          {channel.isSubscribed ? 'Joined' : 'Join'}
+                        </Button>
+                      )}
+                    </div>
+                    <div className="mt-2 flex items-center space-x-4 text-sm text-muted-foreground">
+                      <div className="flex items-center">
+                        <Users className="h-4 w-4 mr-1" />
+                        {channel.subscriber_count || 0}
+                      </div>
+                      {channel.is_private && (
+                        <div className="flex items-center">
+                          <Lock className="h-4 w-4 mr-1" />
+                          Private
+                        </div>
+                      )}
+                      {channel.isModerator && (
+                        <Badge variant="outline">Moderator</Badge>
+                      )}
+                      {viewMode === 'trending' && (
+                        <Badge variant="secondary">
+                          <TrendingUp className="h-3 w-3 mr-1" />
+                          Active
+                        </Badge>
+                      )}
+                    </div>
+                  </Card>
+                ))
+              ) : (
+                <div className="text-center p-8 border-2 border-dashed rounded-lg">
+                  <p className="text-muted-foreground">
+                    No communities available
+                  </p>
+                  {user && viewMode === 'all' && (
+                    <p className="text-sm text-muted-foreground mt-2">
+                      Create a new community to get started
                     </p>
-                    {user && (
-                      <p className="text-sm text-muted-foreground mt-2">
-                        Be the first to post in this community
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-4">
+              {selectedChannel ? (
+                <>
+                  {channelPosts?.length ? (
+                    channelPosts.map((post) => (
+                      <Card key={post.id} className="p-4">
+                        <div className="mb-2">
+                          {post.flair && (
+                            <Badge className="mr-2" variant="secondary">
+                              {post.flair}
+                            </Badge>
+                          )}
+                          {post.is_pinned && (
+                            <Badge className="mr-2" variant="outline">
+                              <Pin className="h-3 w-3 mr-1" />
+                              Pinned
+                            </Badge>
+                          )}
+                          <h3 className="text-lg font-semibold mt-1">
+                            {post.title}
+                          </h3>
+                        </div>
+                        <VoicePost post={post} />
+                        <div className="mt-2 flex items-center space-x-4 text-sm text-muted-foreground">
+                          <div className="flex items-center">
+                            <Eye className="h-4 w-4 mr-1" />
+                            {post.view_count || 0} views
+                          </div>
+                          {Array.isArray(post.tags) && post.tags.length > 0 && (
+                            <div className="flex items-center">
+                              <Tag className="h-4 w-4 mr-1" />
+                              {post.tags.join(', ')}
+                            </div>
+                          )}
+                        </div>
+                      </Card>
+                    ))
+                  ) : (
+                    <div className="text-center p-8 border-2 border-dashed rounded-lg">
+                      <p className="text-muted-foreground">
+                        No posts in this community yet
                       </p>
-                    )}
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="text-center p-8 border-2 border-dashed rounded-lg">
-                <p className="text-muted-foreground">
-                  Select a community to view posts
-                </p>
-              </div>
-            )}
+                      {user && (
+                        <p className="text-sm text-muted-foreground mt-2">
+                          Be the first to post in this community
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="text-center p-8 border-2 border-dashed rounded-lg">
+                  <p className="text-muted-foreground">
+                    Select a community to view posts
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        </Tabs>
       </div>
     </Layout>
   );

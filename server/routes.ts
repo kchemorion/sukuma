@@ -806,4 +806,94 @@ export function registerRoutes(app: Express) {
       });
     }
   });
+
+  // Get trending channels
+  app.get("/api/channels/trending", async (_req, res) => {
+    try {
+      const trendingChannels = await db.select({
+        ...channels,
+        subscriber_count: sql`(SELECT COUNT(*) FROM ${channel_subscribers} WHERE channel_id = ${channels.id})`
+      })
+      .from(channels)
+      .orderBy(sql`weekly_activity DESC`)
+      .limit(10);
+
+      res.json(trendingChannels);
+    } catch (error) {
+      console.error('[API] Error fetching trending channels:', error);
+      res.status(500).json({ error: "Failed to fetch trending channels" });
+    }
+  });
+
+  // Get channel recommendations based on user's interests
+  app.get("/api/channels/recommended", async (req: any, res) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      // Get user's subscribed channels
+      const userSubscriptions = await db.select({
+        channel_id: channel_subscribers.channel_id
+      })
+      .from(channel_subscribers)
+      .where(eq(channel_subscribers.user_id, req.user.id));
+
+      const subscribedIds = userSubscriptions.map(sub => sub.channel_id);
+
+      // Get categories from user's subscribed channels
+      const userCategories = await db.select({
+        categories: channels.categories
+      })
+      .from(channels)
+      .where(sql`id = ANY(${subscribedIds})`);
+
+      const flatCategories = userCategories
+        .flatMap(channel => channel.categories || [])
+        .filter((category, index, self) => self.indexOf(category) === index);
+
+      // Get recommended channels based on categories and exclude already subscribed ones
+      const recommendedChannels = await db.select({
+        ...channels,
+        subscriber_count: sql`(SELECT COUNT(*) FROM ${channel_subscribers} WHERE channel_id = ${channels.id})`
+      })
+      .from(channels)
+      .where(
+        and(
+          sql`categories && ${flatCategories}`,
+          sql`id != ALL(${subscribedIds})`,
+          eq(channels.is_private, false)
+        )
+      )
+      .orderBy(sql`weekly_activity DESC`)
+      .limit(10);
+
+      res.json(recommendedChannels);
+    } catch (error) {
+      console.error('[API] Error fetching recommended channels:', error);
+      res.status(500).json({ error: "Failed to fetch recommended channels" });
+    }
+  });
+
+  // Get channels by category
+  app.get("/api/channels/category/:category", async (req, res) => {
+    try {
+      const category = req.params.category;
+      
+      const categoryChannels = await db.select({
+        ...channels,
+        subscriber_count: sql`(SELECT COUNT(*) FROM ${channel_subscribers} WHERE channel_id = ${channels.id})`
+      })
+      .from(channels)
+      .where(sql`${category} = ANY(categories)`)
+      .orderBy(sql`subscriber_count DESC`)
+      .limit(20);
+
+      res.json(categoryChannels);
+    } catch (error) {
+      console.error('[API] Error fetching channels by category:', error);
+      res.status(500).json({ error: "Failed to fetch channels by category" });
+    }
+  });
+
 }
