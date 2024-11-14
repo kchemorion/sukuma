@@ -95,6 +95,38 @@ export function setupAuth(app: Express) {
     }
   });
 
+  app.post("/guest-login", (req, res) => {
+    console.log('[Auth] Guest login initiated');
+    
+    // Generate a unique guest username
+    const guestId = Math.random().toString(36).substring(2, 15);
+    const guestUser = {
+      id: 0,
+      username: `Guest_${guestId}`,
+      points: 0,
+      isGuest: true
+    };
+
+    // Set up guest session
+    req.session.guestUser = guestUser;
+    req.session.save((err) => {
+      if (err) {
+        console.error('[Auth] Guest session save error:', err);
+        return res.status(500).json({ message: "Error creating guest session" });
+      }
+
+      console.log('[Auth] Guest login successful:', { 
+        guestId: guestUser.username,
+        sessionID: req.sessionID 
+      });
+      
+      res.json({
+        message: "Guest login successful",
+        user: guestUser
+      });
+    });
+  });
+
   app.post("/register", async (req, res, next) => {
     try {
       console.log('[Auth] Registration attempt:', { username: req.body.username });
@@ -219,15 +251,18 @@ export function setupAuth(app: Express) {
   });
 
   app.post("/logout", (req, res) => {
-    if (!req.isAuthenticated()) {
+    if (!req.isAuthenticated() && !req.session.guestUser) {
       return res.status(401).json({ message: "Not logged in" });
     }
     
     const sessionID = req.sessionID;
     console.log('[Auth] Logout initiated:', { 
-      userId: req.user?.id,
+      userId: req.user?.id || req.session.guestUser?.username,
       sessionID 
     });
+
+    // Clear any guest session
+    delete req.session.guestUser;
 
     req.logout((err) => {
       if (err) {
@@ -260,8 +295,13 @@ export function setupAuth(app: Express) {
       user: req.user ? { id: req.user.id, username: req.user.username } : 'guest'
     });
 
+    // Check for guest session first
+    if (req.session.guestUser) {
+      return res.json(req.session.guestUser);
+    }
+
     if (!req.isAuthenticated() || !req.user) {
-      // Return guest user object for unauthenticated users
+      // Return default guest user object for unauthenticated users
       return res.json({
         id: 0,
         username: 'Guest',

@@ -11,7 +11,7 @@ import { Layout } from "@/components/Layout";
 
 export function Login() {
   const { toast } = useToast();
-  const { login } = useUser();
+  const { login, guestLogin } = useUser();
   const [, setLocation] = useLocation();
   const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm({
     resolver: zodResolver(insertUserSchema),
@@ -19,6 +19,19 @@ export function Login() {
 
   const onSubmit = async (data: any) => {
     const result = await login(data);
+    if (result.ok) {
+      setLocation("/");
+    } else {
+      toast({
+        title: "Error",
+        description: result.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleGuestLogin = async () => {
+    const result = await guestLogin();
     if (result.ok) {
       setLocation("/");
     } else {
@@ -60,6 +73,27 @@ export function Login() {
               Login
             </Button>
           </form>
+          
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t" />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-background px-2 text-muted-foreground">
+                Or continue with
+              </span>
+            </div>
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full"
+            onClick={handleGuestLogin}
+          >
+            Continue as Guest
+          </Button>
+
           <p className="text-center text-sm text-muted-foreground">
             Don't have an account?{" "}
             <Button variant="link" className="p-0" onClick={() => setLocation("/register")}>

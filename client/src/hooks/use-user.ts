@@ -67,6 +67,10 @@ export function useUser() {
     return handleAuthRequest("/login", "POST", user);
   };
 
+  const guestLogin = async () => {
+    return handleAuthRequest("/guest-login", "POST");
+  };
+
   const logout = async () => {
     const result = await handleAuthRequest("/logout", "POST");
     if (result.ok) {
@@ -85,6 +89,7 @@ export function useUser() {
     isError: error && error.status !== 401,
     error,
     login,
+    guestLogin,
     logout,
     register,
   };
