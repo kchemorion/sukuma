@@ -1,0 +1,202 @@
+Voice Posts
+
+Users record audio posts instead of typing text
+
+Each post includes metadata like timestamp, duration, and speaker information
+
+Audio posts can be up to 10 minutes long (adjustable)
+
+Voice Comments
+
+Users record audio replies to posts instead of typing text comments
+
+Comments can be up to 5 minutes long (adjustable)
+
+Sound Effects on Reactions
+
+Different sound effects play when users react to voicenotes (e.g., heart for likes, clap for upvotes)
+
+Admin Dashboard
+
+Google login integration for users
+
+Stripe configuration fields for advertisement management
+
+Referral percentage settings for admin area
+
+User Interface
+Home Screen
+
+Featured voice posts from subreddits the user subscribes to
+
+A "Hot" section showcasing top-voted voice content across all subreddits
+
+Autoplay functionality for continuous listening
+
+Subreddit Pages
+
+Voice posts organized by subreddit topics
+
+Comment threads with voice replies
+
+Audio Player
+
+Built-in player for seamless listening to voice posts and comments
+
+Option to speed up/slow down playback
+
+Auto-scrolling transcript while listening
+
+Voice Post Creation
+
+Microphone icon for recording new voice posts
+
+Option to add voice effects (e.g., background noise reduction, pitch adjustment)
+
+Auto-hide dialogue box after posting
+
+Channels
+
+Themed channels for specific topics or communities
+
+Ability to switch between main feed and specific channels
+
+Admin Dashboard
+User Management
+
+Google login integration
+
+User profile management
+
+Content Moderation
+
+AI-powered content moderation tools
+
+Manual moderation controls
+
+Monetization
+
+Stripe integration for advertisement payments
+
+Wallet management (za kabej)
+
+Loyalty point system (mboga points)
+
+Viral content reward distribution
+
+Analytics
+
+User engagement metrics
+
+Content performance analytics
+
+Referral program tracking
+
+Referral System
+
+Percentage settings for referral earnings
+
+Leaderboard for top referrers
+
+Technical Implementation
+Frontend
+
+Built using React Native for cross-platform compatibility (iOS, Android, web)
+
+Utilizes Web Audio API for high-quality audio processing
+
+Backend
+
+Node.js with Express for server-side operations
+
+MongoDB for storing audio files and metadata
+
+Audio Storage
+
+Cloud storage solution like AWS S3 for efficient audio file management
+
+AI Integration
+
+TensorFlow.js for on-device audio transcription and analysis
+
+Advertisement Slot Management
+
+Dynamic ad insertion system for seamless placement between voicenotes
+
+Monetization Strategies
+Premium Features
+
+Ad-free experience
+
+Ability to edit voice posts after submission
+
+Access to advanced audio editing tools
+
+Sponsored Content
+
+Brands can create sponsored voice posts in relevant subreddits
+
+Voice Post Marketplace
+
+Users can purchase exclusive voice content from popular creators
+
+Privacy and Security
+End-to-End Encryption
+
+Secure voice posts and comments between users and Reddit servers
+
+Audio Deletion
+
+Option to delete voice posts and comments permanently
+
+Voice Content Moderation
+
+AI-powered content moderation for inappropriate audio content
+
+Accessibility Features
+Screen Reader Compatibility
+
+Fully accessible for visually impaired users
+
+Transcription Options
+
+Automatic transcription with customizable accuracy settings
+
+Voice Assistant Integration
+
+Seamless integration with popular voice assistants for hands-free operation
+
+Export and Distribution
+Android App Development
+
+Develop native Android app using React Native
+
+Optimize for Google Play Store submission
+
+iOS App Development
+
+Create iOS version using React Native
+
+Prepare for Apple App Store submission
+
+Referral System Implementation
+Referral Link Generation
+
+Generate unique referral links for each user
+
+Referral Tracking
+
+Track referrals through unique link clicks or email invitations
+
+Earnings Distribution
+
+Automatically distribute referral earnings based on admin settings
+
+Loyalty Point System
+Point Earning
+
+Users earn mboga points for various actions (e.g., posting, commenting, upvoting)
+
+Reward Redemption
+
+Allow users to redeem points for premium features or exclusive content
