@@ -54,10 +54,9 @@ const sessionPool = new Pool({
     app.use(express.json());
     app.use(express.urlencoded({ extended: true }));
 
-    // CORS configuration with proper credentials handling
+    // Enhanced CORS configuration with proper credentials handling
     const corsOptions = {
       origin: function(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
-        // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin || !isProduction) {
           callback(null, true);
           return;
@@ -86,33 +85,47 @@ const sessionPool = new Pool({
 
     app.use(cors(corsOptions));
 
-    // Session store configuration
+    // Enhanced session store configuration
     const sessionStore = new PostgresqlStore({
       pool: sessionPool,
       tableName: 'session',
       createTableIfMissing: true,
-      pruneSessionInterval: 60
+      pruneSessionInterval: 60 * 15, // Prune expired sessions every 15 minutes
+      errorLog: console.error.bind(console, '[Session Store Error]')
     });
 
-    // Session middleware configuration
+    // Enhanced session middleware configuration
     const sessionMiddleware = session({
       store: sessionStore,
-      secret: process.env.REPL_ID || "your-secret-key",
+      secret: process.env.SESSION_SECRET || process.env.REPL_ID || "your-secret-key",
       name: 'sukuma.sid',
       resave: false,
       saveUninitialized: false,
+      rolling: true, // Extends session on activity
       proxy: true,
       cookie: {
         secure: isProduction,
         httpOnly: true,
         sameSite: isProduction ? 'none' : 'lax',
-        maxAge: 24 * 60 * 60 * 1000
+        maxAge: 24 * 60 * 60 * 1000, // 24 hours
+        path: '/'
       }
     });
 
+    // Session and passport middleware
     app.use(sessionMiddleware);
     app.use(passport.initialize());
     app.use(passport.session());
+
+    // Session activity middleware
+    app.use((req, res, next) => {
+      if (req.session && !req.session.touch) {
+        console.warn('[Session] Session object missing touch method');
+      } else if (req.session) {
+        req.session.touch();
+      }
+      next();
+    });
 
     // Initialize routes
     setupAuth(app);
@@ -129,7 +142,8 @@ const sessionPool = new Pool({
         error: err.message,
         stack: err.stack,
         url: req.url,
-        method: req.method
+        method: req.method,
+        sessionID: req.sessionID
       });
 
       res.status(500).json({ 

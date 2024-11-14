@@ -136,16 +136,23 @@ export function setupAuth(app: Express) {
           return next(err);
         }
         
-        req.session.save((err) => {
+        req.session.regenerate((err) => {
           if (err) {
-            console.error('[Auth] Session save error:', err);
+            console.error('[Auth] Session regeneration error:', err);
             return next(err);
           }
           
-          console.log('[Auth] Registration and login successful:', { userId: newUser.id });
-          res.json({
-            message: "Registration successful",
-            user: { id: newUser.id, username: newUser.username },
+          req.session.save((err) => {
+            if (err) {
+              console.error('[Auth] Session save error:', err);
+              return next(err);
+            }
+            
+            console.log('[Auth] Registration and login successful:', { userId: newUser.id });
+            res.json({
+              message: "Registration successful",
+              user: { id: newUser.id, username: newUser.username },
+            });
           });
         });
       });
@@ -180,24 +187,31 @@ export function setupAuth(app: Express) {
           return next(err);
         }
 
-        req.session.save((err) => {
+        req.session.regenerate((err) => {
           if (err) {
-            console.error('[Auth] Session save error:', err);
+            console.error('[Auth] Session regeneration error:', err);
             return next(err);
           }
 
-          console.log('[Auth] Login successful:', { 
-            userId: user.id,
-            sessionID: req.sessionID
-          });
-          
-          res.json({
-            message: "Login successful",
-            user: {
-              id: user.id,
-              username: user.username,
-              points: user.points
+          req.session.save((err) => {
+            if (err) {
+              console.error('[Auth] Session save error:', err);
+              return next(err);
             }
+
+            console.log('[Auth] Login successful:', { 
+              userId: user.id,
+              sessionID: req.sessionID
+            });
+            
+            res.json({
+              message: "Login successful",
+              user: {
+                id: user.id,
+                username: user.username,
+                points: user.points
+              }
+            });
           });
         });
       });
@@ -228,7 +242,12 @@ export function setupAuth(app: Express) {
         }
 
         console.log('[Auth] Logout successful:', { sessionID });
-        res.clearCookie('sukuma.sid');
+        res.clearCookie('sukuma.sid', {
+          path: '/',
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: process.env.NODE_ENV === "production" ? 'none' : 'lax'
+        });
         res.json({ message: "Logout successful" });
       });
     });
@@ -245,7 +264,7 @@ export function setupAuth(app: Express) {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    // Ensure session is properly saved
+    // Ensure session is properly saved and extended
     req.session.touch();
     req.session.save((err) => {
       if (err) {
