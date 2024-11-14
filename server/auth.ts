@@ -112,6 +112,7 @@ export function setupAuth(app: Express) {
       let guestUsername: string;
       let guestId: string;
       
+      // Improved guest session validation
       if (existingGuestId && typeof existingGuestId === 'string') {
         // Check for existing guest preferences using guest ID
         const [existingPrefs] = await db
@@ -120,13 +121,24 @@ export function setupAuth(app: Express) {
           .where(eq(guest_preferences.guest_id, existingGuestId))
           .limit(1);
 
-        if (existingPrefs) {
-          guestUsername = existingPrefs.guest_username;
-          guestId = existingGuestId;
-          console.log('[Auth] Found existing guest preferences:', { 
-            guestId,
-            username: guestUsername
-          });
+        if (existingPrefs && existingPrefs.session_id) {
+          // Validate session is still active
+          if (existingPrefs.session_id === req.sessionID) {
+            guestUsername = existingPrefs.guest_username;
+            guestId = existingGuestId;
+            console.log('[Auth] Found existing guest preferences:', { 
+              guestId,
+              username: guestUsername
+            });
+          } else {
+            // Session mismatch - create new guest session
+            guestId = Math.random().toString(36).substring(2, 15);
+            guestUsername = `Guest_${guestId}`;
+            console.log('[Auth] Session expired, creating new guest:', {
+              guestId,
+              username: guestUsername
+            });
+          }
         } else {
           // Generate new guest ID and username if existing ID not found
           guestId = Math.random().toString(36).substring(2, 15);
@@ -146,21 +158,27 @@ export function setupAuth(app: Express) {
         });
       }
 
-      // Create or update guest preferences
-      await db.insert(guest_preferences)
-        .values({
-          guest_id: guestId,
-          session_id: req.sessionID,
-          guest_username: guestUsername,
-          preferences: {},
-        })
-        .onConflictDoUpdate({
-          target: guest_preferences.guest_id,
-          set: {
+      // Create or update guest preferences with improved error handling
+      try {
+        await db.insert(guest_preferences)
+          .values({
+            guest_id: guestId,
             session_id: req.sessionID,
+            guest_username: guestUsername,
+            preferences: {},
             updated_at: new Date()
-          }
-        });
+          })
+          .onConflictDoUpdate({
+            target: guest_preferences.guest_id,
+            set: {
+              session_id: req.sessionID,
+              updated_at: new Date()
+            }
+          });
+      } catch (dbError) {
+        console.error('[Auth] Database error creating guest preferences:', dbError);
+        throw new Error('Failed to create guest preferences');
+      }
 
       const guestUser = {
         id: 0,
@@ -170,9 +188,20 @@ export function setupAuth(app: Express) {
         guestId
       };
 
-      // Set up guest session
+      // Set up guest session with proper error handling
       req.session.guestUser = guestUser;
-      await req.session.save();
+      
+      try {
+        await new Promise<void>((resolve, reject) => {
+          req.session.save((err) => {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
+      } catch (sessionError) {
+        console.error('[Auth] Session save error:', sessionError);
+        throw new Error('Failed to save guest session');
+      }
 
       console.log('[Auth] Guest login successful:', { 
         guestId,
@@ -412,7 +441,14 @@ export function setupAuth(app: Express) {
     try {
       const guestId = req.headers['x-guest-id'];
       
-      if (!req.session.guestUser?.guestId || !guestId || req.session.guestUser.guestId !== guestId) {
+      if (!req.session.guestUser?.guestId || !guestId) {
+        return res.status(401).json({ 
+          error: "Unauthorized",
+          details: "Missing guest session"
+        });
+      }
+
+      if (req.session.guestUser.guestId !== guestId) {
         return res.status(401).json({ 
           error: "Unauthorized",
           details: "Invalid guest session"
@@ -429,6 +465,14 @@ export function setupAuth(app: Express) {
         return res.status(404).json({
           error: "Not Found",
           details: "Guest preferences not found"
+        });
+      }
+
+      // Verify session is still valid
+      if (preferences.session_id !== req.sessionID) {
+        return res.status(401).json({
+          error: "Unauthorized",
+          details: "Session expired"
         });
       }
 
