@@ -54,10 +54,11 @@ const sessionPool = new Pool({
     app.use(express.json());
     app.use(express.urlencoded({ extended: true }));
 
-    // Enhanced CORS configuration with proper credentials handling
+    // Development-friendly CORS configuration
     const corsOptions = {
       origin: function(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
-        if (!origin || !isProduction) {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) {
           callback(null, true);
           return;
         }
@@ -65,11 +66,12 @@ const sessionPool = new Pool({
         const allowedOrigins = [
           `https://${domain}`,
           `http://${domain}`,
-          `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`,
-          'https://replit.com'
+          'http://localhost:5000',
+          'http://localhost:3000',
+          `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
         ];
 
-        if (allowedOrigins.includes(origin)) {
+        if (allowedOrigins.includes(origin) || !isProduction) {
           callback(null, true);
         } else {
           console.warn('[CORS] Blocked request from:', origin);
@@ -85,19 +87,26 @@ const sessionPool = new Pool({
 
     app.use(cors(corsOptions));
 
-    // Enhanced session store configuration
+    // Session store configuration with error handling
     const sessionStore = new PostgresqlStore({
       pool: sessionPool,
       tableName: 'session',
       createTableIfMissing: true,
       pruneSessionInterval: 60 * 15, // Prune expired sessions every 15 minutes
-      errorLog: console.error.bind(console, '[Session Store Error]')
+      errorLog: (error: Error) => {
+        console.error('[Session Store Error]', error);
+      }
     });
+
+    if (!process.env.SESSION_SECRET) {
+      console.error('[Server] SESSION_SECRET environment variable is not set!');
+      process.exit(1);
+    }
 
     // Enhanced session middleware configuration
     const sessionMiddleware = session({
       store: sessionStore,
-      secret: process.env.SESSION_SECRET || process.env.REPL_ID || "your-secret-key",
+      secret: process.env.SESSION_SECRET,
       name: 'sukuma.sid',
       resave: false,
       saveUninitialized: false,
@@ -108,7 +117,8 @@ const sessionPool = new Pool({
         httpOnly: true,
         sameSite: isProduction ? 'none' : 'lax',
         maxAge: 24 * 60 * 60 * 1000, // 24 hours
-        path: '/'
+        path: '/',
+        domain: isProduction ? `.${process.env.REPL_OWNER}.repl.co` : undefined
       }
     });
 
@@ -117,11 +127,17 @@ const sessionPool = new Pool({
     app.use(passport.initialize());
     app.use(passport.session());
 
-    // Session activity middleware
+    // Session monitoring middleware
     app.use((req, res, next) => {
-      if (req.session && !req.session.touch) {
+      if (!req.session) {
+        console.error('[Session] No session found for request:', {
+          path: req.path,
+          method: req.method,
+          ip: req.ip
+        });
+      } else if (!req.session.touch) {
         console.warn('[Session] Session object missing touch method');
-      } else if (req.session) {
+      } else {
         req.session.touch();
       }
       next();
@@ -133,17 +149,23 @@ const sessionPool = new Pool({
 
     // Health check endpoint
     app.get('/health', (_req, res) => {
-      res.json({ status: 'ok', timestamp: new Date().toISOString() });
+      res.json({ 
+        status: 'ok', 
+        timestamp: new Date().toISOString(),
+        environment: process.env.NODE_ENV || 'development'
+      });
     });
 
-    // Error handling middleware
+    // Enhanced error handling middleware
     app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
       console.error('[Server Error]', {
         error: err.message,
         stack: err.stack,
         url: req.url,
         method: req.method,
-        sessionID: req.sessionID
+        sessionID: req.sessionID,
+        authenticated: req.isAuthenticated(),
+        userID: req.user?.id
       });
 
       res.status(500).json({ 
@@ -176,6 +198,11 @@ const sessionPool = new Pool({
       server.listen(PORT, "0.0.0.0", () => {
         console.log(`[Server] Running at http://0.0.0.0:${PORT}`);
         console.log(`[Server] Environment: ${process.env.NODE_ENV || 'development'}`);
+        console.log(`[Server] Session configuration:`, {
+          secure: isProduction,
+          sameSite: isProduction ? 'none' : 'lax',
+          domain: isProduction ? `.${process.env.REPL_OWNER}.repl.co` : undefined
+        });
         resolve();
       }).on('error', reject);
     });
