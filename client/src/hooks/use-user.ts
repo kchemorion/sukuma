@@ -44,7 +44,6 @@ export function useUser() {
 
       if (!response.ok) {
         if (response.status === 401) {
-          // Clear user data on authentication failure
           await mutate(undefined, { revalidate: false });
         }
         return { 
@@ -53,7 +52,6 @@ export function useUser() {
         };
       }
 
-      // Update local data after successful request
       await mutate(data.user || undefined, { revalidate: true });
       return { ok: true, data };
     } catch (e) {
@@ -75,17 +73,21 @@ export function useUser() {
 
   const logout = async () => {
     try {
+      // Clear user data before making logout request
+      await mutate(undefined, { revalidate: false });
+      
       const result = await handleAuthRequest("/logout", "POST");
-      if (result.ok) {
-        // Ensure proper cleanup of user data
-        await mutate(undefined, { 
-          revalidate: false,
-          rollbackOnError: true
-        });
+      
+      // If logout failed, revalidate to get current user state
+      if (!result.ok) {
+        await mutate(undefined, { revalidate: true });
       }
+      
       return result;
     } catch (error) {
       console.error('[Auth] Logout error:', error);
+      // Revalidate on error to ensure correct state
+      await mutate(undefined, { revalidate: true });
       return {
         ok: false,
         message: error instanceof Error ? error.message : 'Logout failed'

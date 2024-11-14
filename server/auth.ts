@@ -251,19 +251,18 @@ export function setupAuth(app: Express) {
   });
 
   app.post("/logout", (req, res) => {
-    if (!req.isAuthenticated() && !req.session.guestUser) {
-      return res.status(401).json({ message: "Not logged in" });
-    }
-    
     const sessionID = req.sessionID;
     console.log('[Auth] Logout initiated:', { 
       userId: req.user?.id || req.session.guestUser?.username,
       sessionID 
     });
 
-    // Clear any guest session
-    delete req.session.guestUser;
+    // Handle guest session cleanup
+    if (req.session.guestUser) {
+      delete req.session.guestUser;
+    }
 
+    // Handle regular session cleanup
     req.logout((err) => {
       if (err) {
         console.error('[Auth] Logout error:', err);
@@ -283,7 +282,10 @@ export function setupAuth(app: Express) {
           secure: process.env.NODE_ENV === "production",
           sameSite: process.env.NODE_ENV === "production" ? 'none' : 'lax'
         });
-        res.json({ message: "Logout successful" });
+        res.json({ 
+          message: "Logout successful",
+          success: true
+        });
       });
     });
   });

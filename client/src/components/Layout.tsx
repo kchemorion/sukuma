@@ -1,4 +1,4 @@
-import { Link, useLocation } from 'wouter';
+import { Link } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { useUser } from '../hooks/use-user';
 import { useToast } from '../hooks/use-toast';
@@ -13,22 +13,18 @@ import { Leaf, LogOut, User, Radio } from 'lucide-react';
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useUser();
-  const [, setLocation] = useLocation();
   const { toast } = useToast();
 
   const handleLogout = async () => {
     try {
       const result = await logout();
       if (result.ok) {
-        // Show success message
         toast({
           title: "Success",
           description: "Logged out successfully",
         });
-        // Redirect after successful logout
-        setLocation('/login');
+        window.location.href = '/login'; // Use direct navigation
       } else {
-        // Show error message
         toast({
           title: "Error",
           description: result.message || "Failed to logout",
