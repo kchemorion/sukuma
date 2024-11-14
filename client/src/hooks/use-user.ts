@@ -1,9 +1,12 @@
 import useSWR from "swr";
 import type { User, InsertUser } from "db/schema";
 
-interface ExtendedUser extends User {
+interface ExtendedUser {
+  id: number;
+  username: string;
+  password: string;
+  points: number;
   isGuest?: boolean;
-  password?: string;
 }
 
 interface GuestPreferences {
