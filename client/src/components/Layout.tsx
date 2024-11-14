@@ -1,4 +1,4 @@
-import { Link } from 'wouter';
+import { Link, useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { useUser } from '../hooks/use-user';
 import {
@@ -12,6 +12,14 @@ import { Leaf, LogOut, User, Radio } from 'lucide-react';
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useUser();
+  const [, setLocation] = useLocation();
+
+  const handleLogout = async () => {
+    const result = await logout();
+    if (result.ok) {
+      setLocation('/login');
+    }
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -53,7 +61,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     </Button>
                   </Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => logout()}>
+                <DropdownMenuItem onClick={handleLogout}>
                   <LogOut className="mr-2 h-4 w-4" />
                   Logout
                 </DropdownMenuItem>
