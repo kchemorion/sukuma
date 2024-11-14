@@ -107,40 +107,59 @@ export function setupAuth(app: Express) {
     console.log('[Auth] Guest login initiated');
     
     try {
-      // Check for existing guest preferences
-      const [existingPrefs] = await db
-        .select()
-        .from(guest_preferences)
-        .where(eq(guest_preferences.session_id, req.sessionID))
-        .limit(1);
-
+      const existingGuestId = req.headers['x-guest-id'];
       let guestUsername: string;
+      let guestId: string;
       
-      if (existingPrefs) {
-        // Use existing guest username
-        guestUsername = existingPrefs.guest_username;
-        console.log('[Auth] Found existing guest preferences:', { 
-          sessionId: req.sessionID,
-          username: guestUsername
-        });
-      } else {
-        // Generate new guest username
-        const guestId = Math.random().toString(36).substring(2, 15);
-        guestUsername = `Guest_${guestId}`;
-        
-        // Create new guest preferences
-        await db.insert(guest_preferences)
-          .values({
-            session_id: req.sessionID,
-            guest_username: guestUsername,
-            preferences: {},
+      if (existingGuestId && typeof existingGuestId === 'string') {
+        // Check for existing guest preferences using guest ID
+        const [existingPrefs] = await db
+          .select()
+          .from(guest_preferences)
+          .where(eq(guest_preferences.guest_id, existingGuestId))
+          .limit(1);
+
+        if (existingPrefs) {
+          guestUsername = existingPrefs.guest_username;
+          guestId = existingGuestId;
+          console.log('[Auth] Found existing guest preferences:', { 
+            guestId,
+            username: guestUsername
           });
-          
-        console.log('[Auth] Created new guest preferences:', { 
-          sessionId: req.sessionID,
+        } else {
+          // Generate new guest ID and username if existing ID not found
+          guestId = Math.random().toString(36).substring(2, 15);
+          guestUsername = `Guest_${guestId}`;
+          console.log('[Auth] Existing guest ID not found, creating new:', {
+            guestId,
+            username: guestUsername
+          });
+        }
+      } else {
+        // Generate new guest ID and username
+        guestId = Math.random().toString(36).substring(2, 15);
+        guestUsername = `Guest_${guestId}`;
+        console.log('[Auth] Creating new guest account:', {
+          guestId,
           username: guestUsername
         });
       }
+
+      // Create or update guest preferences
+      await db.insert(guest_preferences)
+        .values({
+          guest_id: guestId,
+          session_id: req.sessionID,
+          guest_username: guestUsername,
+          preferences: {},
+        })
+        .onConflictDoUpdate({
+          target: guest_preferences.guest_id,
+          set: {
+            session_id: req.sessionID,
+            updated_at: new Date()
+          }
+        });
 
       const guestUser = {
         id: 0,
@@ -154,13 +173,15 @@ export function setupAuth(app: Express) {
       await req.session.save();
 
       console.log('[Auth] Guest login successful:', { 
-        guestId: guestUser.username,
+        guestId,
+        username: guestUsername,
         sessionID: req.sessionID 
       });
       
       res.json({
         message: "Guest login successful",
-        user: guestUser
+        user: guestUser,
+        guestId
       });
     } catch (error) {
       console.error('[Auth] Guest login error:', error);
@@ -379,6 +400,33 @@ export function setupAuth(app: Express) {
       console.error('[Auth] Error fetching user info:', error);
       res.status(500).json({ 
         error: "Failed to fetch user info",
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  app.get("/api/guest-preferences", async (req, res) => {
+    try {
+      const guestId = req.headers['x-guest-id'];
+      
+      if (!req.session.guestUser || !guestId) {
+        return res.status(401).json({ 
+          error: "Unauthorized",
+          details: "Only guest users can access preferences"
+        });
+      }
+
+      const [preferences] = await db
+        .select()
+        .from(guest_preferences)
+        .where(eq(guest_preferences.guest_id, guestId as string))
+        .limit(1);
+
+      res.json(preferences?.preferences || {});
+    } catch (error) {
+      console.error('[Auth] Error fetching guest preferences:', error);
+      res.status(500).json({ 
+        error: "Failed to fetch guest preferences",
         details: error instanceof Error ? error.message : 'Unknown error'
       });
     }

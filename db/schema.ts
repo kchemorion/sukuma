@@ -11,7 +11,8 @@ export const users = pgTable("users", {
 
 export const guest_preferences = pgTable("guest_preferences", {
   id: integer().primaryKey().generatedAlwaysAsIdentity(),
-  session_id: text("session_id").unique().notNull(),
+  guest_id: text("guest_id").unique().notNull(),
+  session_id: text("session_id").notNull(),
   guest_username: text("guest_username").notNull(),
   preferences: jsonb("preferences").notNull().default({}),
   created_at: timestamp("created_at").defaultNow().notNull(),

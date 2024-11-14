@@ -13,6 +13,8 @@ interface GuestPreferences {
   [key: string]: any;
 }
 
+const GUEST_ID_KEY = 'guest_user_id';
+
 export function useUser() {
   const { data: user, error, mutate } = useSWR<ExtendedUser>("/api/user", {
     revalidateOnFocus: true,
@@ -23,9 +25,16 @@ export function useUser() {
     onError: async (err) => {
       console.error('[Auth] Error fetching user:', err);
       try {
-        // Attempt to restore guest session
-        const result = await handleAuthRequest("/guest-login", "POST");
+        // Check for existing guest ID in localStorage
+        const existingGuestId = localStorage.getItem(GUEST_ID_KEY);
+        
+        // Attempt to restore guest session with existing ID
+        const result = await handleAuthRequest("/guest-login", "POST", undefined, existingGuestId);
         if (result.ok && result.data?.user) {
+          // Store new guest ID if provided
+          if (result.data.guestId) {
+            localStorage.setItem(GUEST_ID_KEY, result.data.guestId);
+          }
           await mutate(result.data.user, false);
         } else {
           // Return default guest user on error
@@ -64,15 +73,22 @@ export function useUser() {
   const handleAuthRequest = async (
     url: string,
     method: string,
-    body?: InsertUser
+    body?: InsertUser,
+    guestId?: string | null
   ): Promise<RequestResult> => {
     try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+
+      if (guestId) {
+        headers['X-Guest-ID'] = guestId;
+      }
+
       const response = await fetch(url, {
         method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
+        headers,
         body: body ? JSON.stringify(body) : undefined,
         credentials: 'include'
       });
@@ -109,11 +125,18 @@ export function useUser() {
     }
 
     try {
+      const guestId = localStorage.getItem(GUEST_ID_KEY);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+
+      if (guestId) {
+        headers['X-Guest-ID'] = guestId;
+      }
+
       const response = await fetch("/api/guest-preferences", {
         method: "POST",
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify(newPreferences),
         credentials: 'include'
       });
@@ -138,16 +161,34 @@ export function useUser() {
   };
 
   const login = async (user: InsertUser) => {
+    // Clear guest ID on regular login
+    localStorage.removeItem(GUEST_ID_KEY);
     return handleAuthRequest("/login", "POST", user);
   };
 
   const guestLogin = async () => {
-    return handleAuthRequest("/guest-login", "POST");
+    try {
+      const existingGuestId = localStorage.getItem(GUEST_ID_KEY);
+      const result = await handleAuthRequest("/guest-login", "POST", undefined, existingGuestId);
+      
+      if (result.ok && result.data?.guestId) {
+        localStorage.setItem(GUEST_ID_KEY, result.data.guestId);
+      }
+      
+      return result;
+    } catch (error) {
+      console.error('[Auth] Guest login error:', error);
+      return {
+        ok: false,
+        message: error instanceof Error ? error.message : "Guest login failed"
+      };
+    }
   };
 
   const logout = async () => {
     try {
-      // Clear user data before making logout request
+      // Clear guest ID and user data before making logout request
+      localStorage.removeItem(GUEST_ID_KEY);
       await mutate(undefined, { revalidate: false });
       await mutatePreferences(undefined, false);
       
@@ -171,6 +212,8 @@ export function useUser() {
   };
 
   const register = async (user: InsertUser) => {
+    // Clear guest ID on registration
+    localStorage.removeItem(GUEST_ID_KEY);
     return handleAuthRequest("/register", "POST", user);
   };
 
