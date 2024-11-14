@@ -16,15 +16,31 @@ export function useUser() {
     revalidateOnReconnect: true,
     refreshInterval: 30000,
     dedupingInterval: 5000,
-    onError: (err) => {
+    onError: async (err) => {
       console.error('[Auth] Error fetching user:', err);
-      // Return guest user on error
-      mutate({
-        id: 0,
-        username: 'Guest',
-        points: 0,
-        isGuest: true
-      }, false);
+      try {
+        // Attempt to restore guest session
+        const result = await handleAuthRequest("/guest-login", "POST");
+        if (result.ok && result.data?.user) {
+          await mutate(result.data.user, false);
+        } else {
+          // Return default guest user on error
+          await mutate({
+            id: 0,
+            username: 'Guest',
+            points: 0,
+            isGuest: true
+          }, false);
+        }
+      } catch (e) {
+        console.error('[Auth] Failed to restore guest session:', e);
+        await mutate({
+          id: 0,
+          username: 'Guest',
+          points: 0,
+          isGuest: true
+        }, false);
+      }
     }
   });
 
@@ -33,6 +49,9 @@ export function useUser() {
     {
       revalidateOnFocus: false,
       dedupingInterval: 5000,
+      onError: (err) => {
+        console.error('[Auth] Error fetching guest preferences:', err);
+      }
     }
   );
 
@@ -124,6 +143,7 @@ export function useUser() {
     try {
       // Clear user data before making logout request
       await mutate(undefined, { revalidate: false });
+      await mutatePreferences(undefined, false);
       
       const result = await handleAuthRequest("/logout", "POST");
       

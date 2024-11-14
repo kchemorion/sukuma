@@ -29,6 +29,14 @@ const crypto = {
 declare global {
   namespace Express {
     interface User extends SelectUser {}
+    interface Session {
+      guestUser?: {
+        id: number;
+        username: string;
+        points: number;
+        isGuest: boolean;
+      };
+    }
   }
 }
 
@@ -98,27 +106,51 @@ export function setupAuth(app: Express) {
   app.post("/guest-login", async (req, res) => {
     console.log('[Auth] Guest login initiated');
     
-    // Generate a unique guest username
-    const guestId = Math.random().toString(36).substring(2, 15);
-    const guestUser = {
-      id: 0,
-      username: `Guest_${guestId}`,
-      points: 0,
-      isGuest: true
-    };
-
     try {
+      // Check for existing guest preferences
+      const [existingPrefs] = await db
+        .select()
+        .from(guest_preferences)
+        .where(eq(guest_preferences.session_id, req.sessionID))
+        .limit(1);
+
+      let guestUsername: string;
+      
+      if (existingPrefs) {
+        // Use existing guest username
+        guestUsername = existingPrefs.guest_username;
+        console.log('[Auth] Found existing guest preferences:', { 
+          sessionId: req.sessionID,
+          username: guestUsername
+        });
+      } else {
+        // Generate new guest username
+        const guestId = Math.random().toString(36).substring(2, 15);
+        guestUsername = `Guest_${guestId}`;
+        
+        // Create new guest preferences
+        await db.insert(guest_preferences)
+          .values({
+            session_id: req.sessionID,
+            guest_username: guestUsername,
+            preferences: {},
+          });
+          
+        console.log('[Auth] Created new guest preferences:', { 
+          sessionId: req.sessionID,
+          username: guestUsername
+        });
+      }
+
+      const guestUser = {
+        id: 0,
+        username: guestUsername,
+        points: 0,
+        isGuest: true
+      };
+
       // Set up guest session
       req.session.guestUser = guestUser;
-
-      // Create guest preferences
-      await db.insert(guest_preferences)
-        .values({
-          session_id: req.sessionID,
-          preferences: {},
-        })
-        .onConflictDoNothing();
-
       await req.session.save();
 
       console.log('[Auth] Guest login successful:', { 
@@ -302,38 +334,53 @@ export function setupAuth(app: Express) {
     });
   });
 
-  app.get("/api/user", (req, res) => {
+  app.get("/api/user", async (req, res) => {
     console.log('[Auth] User info request:', { 
       authenticated: req.isAuthenticated(),
       sessionID: req.sessionID,
       user: req.user ? { id: req.user.id, username: req.user.username } : 'guest'
     });
 
-    // Check for guest session first
-    if (req.session.guestUser) {
-      return res.json(req.session.guestUser);
-    }
+    try {
+      // Check for guest session first
+      if (req.session.guestUser) {
+        // Verify guest preferences still exist
+        const [prefs] = await db
+          .select()
+          .from(guest_preferences)
+          .where(eq(guest_preferences.session_id, req.sessionID))
+          .limit(1);
 
-    if (!req.isAuthenticated() || !req.user) {
-      // Return default guest user object for unauthenticated users
-      return res.json({
-        id: 0,
-        username: 'Guest',
-        points: 0,
-        isGuest: true
-      });
-    }
-
-    // Ensure session is properly saved and extended
-    req.session.touch();
-    req.session.save((err) => {
-      if (err) {
-        console.error('[Auth] Session save error:', err);
-        return res.status(500).json({ message: "Session error" });
+        if (prefs) {
+          return res.json(req.session.guestUser);
+        } else {
+          // Clear invalid guest session
+          delete req.session.guestUser;
+        }
       }
+
+      if (!req.isAuthenticated() || !req.user) {
+        // Return default guest user object for unauthenticated users
+        return res.json({
+          id: 0,
+          username: 'Guest',
+          points: 0,
+          isGuest: true
+        });
+      }
+
+      // Ensure session is properly saved and extended
+      req.session.touch();
+      await req.session.save();
 
       const { id, username, points } = req.user;
       res.json({ id, username, points, isGuest: false });
-    });
+    } catch (error) {
+      console.error('[Auth] Error fetching user info:', error);
+      res.status(500).json({ 
+        error: "Failed to fetch user info",
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
   });
 }
