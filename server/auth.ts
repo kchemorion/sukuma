@@ -35,6 +35,7 @@ declare global {
         username: string;
         points: number;
         isGuest: boolean;
+        guestId: string;
       };
     }
   }
@@ -165,7 +166,8 @@ export function setupAuth(app: Express) {
         id: 0,
         username: guestUsername,
         points: 0,
-        isGuest: true
+        isGuest: true,
+        guestId
       };
 
       // Set up guest session
@@ -386,7 +388,8 @@ export function setupAuth(app: Express) {
           id: 0,
           username: 'Guest',
           points: 0,
-          isGuest: true
+          isGuest: true,
+          guestId: ''
         });
       }
 
@@ -409,10 +412,10 @@ export function setupAuth(app: Express) {
     try {
       const guestId = req.headers['x-guest-id'];
       
-      if (!req.session.guestUser || !guestId) {
+      if (!req.session.guestUser?.guestId || !guestId || req.session.guestUser.guestId !== guestId) {
         return res.status(401).json({ 
           error: "Unauthorized",
-          details: "Only guest users can access preferences"
+          details: "Invalid guest session"
         });
       }
 
@@ -422,11 +425,49 @@ export function setupAuth(app: Express) {
         .where(eq(guest_preferences.guest_id, guestId as string))
         .limit(1);
 
-      res.json(preferences?.preferences || {});
+      if (!preferences) {
+        return res.status(404).json({
+          error: "Not Found",
+          details: "Guest preferences not found"
+        });
+      }
+
+      res.json(preferences.preferences || {});
     } catch (error) {
       console.error('[Auth] Error fetching guest preferences:', error);
       res.status(500).json({ 
         error: "Failed to fetch guest preferences",
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  app.post("/api/guest-preferences", async (req, res) => {
+    try {
+      const guestId = req.headers['x-guest-id'];
+      
+      if (!req.session.guestUser?.guestId || !guestId || req.session.guestUser.guestId !== guestId) {
+        return res.status(401).json({ 
+          error: "Unauthorized",
+          details: "Invalid guest session"
+        });
+      }
+
+      await db.update(guest_preferences)
+        .set({ 
+          preferences: req.body,
+          updated_at: new Date()
+        })
+        .where(eq(guest_preferences.guest_id, guestId as string));
+
+      res.json({ 
+        success: true, 
+        preferences: req.body 
+      });
+    } catch (error) {
+      console.error('[Auth] Error updating guest preferences:', error);
+      res.status(500).json({ 
+        error: "Failed to update guest preferences",
         details: error instanceof Error ? error.message : 'Unknown error'
       });
     }

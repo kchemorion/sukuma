@@ -7,6 +7,7 @@ interface ExtendedUser {
   password: string;
   points: number;
   isGuest?: boolean;
+  guestId?: string;
 }
 
 interface GuestPreferences {
@@ -60,10 +61,13 @@ export function useUser() {
   });
 
   const { data: preferences, mutate: mutatePreferences } = useSWR<GuestPreferences>(
-    user?.isGuest && user.username !== 'Guest' ? "/api/guest-preferences" : null,
+    user?.isGuest && user.guestId ? "/api/guest-preferences" : null,
     {
       revalidateOnFocus: false,
       dedupingInterval: 5000,
+      headers: {
+        'X-Guest-ID': user?.guestId || ''
+      },
       onError: (err) => {
         console.error('[Auth] Error fetching guest preferences:', err);
       }
@@ -98,6 +102,7 @@ export function useUser() {
       if (!response.ok) {
         if (response.status === 401) {
           await mutate(undefined, { revalidate: false });
+          localStorage.removeItem(GUEST_ID_KEY);
         }
         return { 
           ok: false, 
@@ -117,7 +122,7 @@ export function useUser() {
   };
 
   const updateGuestPreferences = async (newPreferences: GuestPreferences): Promise<RequestResult> => {
-    if (!user?.isGuest || user.username === 'Guest') {
+    if (!user?.isGuest || !user.guestId) {
       return {
         ok: false,
         message: "Only valid guest users can update preferences"
@@ -125,18 +130,12 @@ export function useUser() {
     }
 
     try {
-      const guestId = localStorage.getItem(GUEST_ID_KEY);
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-
-      if (guestId) {
-        headers['X-Guest-ID'] = guestId;
-      }
-
       const response = await fetch("/api/guest-preferences", {
         method: "POST",
-        headers,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Guest-ID': user.guestId
+        },
         body: JSON.stringify(newPreferences),
         credentials: 'include'
       });
@@ -187,14 +186,12 @@ export function useUser() {
 
   const logout = async () => {
     try {
-      // Clear guest ID and user data before making logout request
       localStorage.removeItem(GUEST_ID_KEY);
       await mutate(undefined, { revalidate: false });
       await mutatePreferences(undefined, false);
       
       const result = await handleAuthRequest("/logout", "POST");
       
-      // If logout failed, revalidate to get current user state
       if (!result.ok) {
         await mutate(undefined, { revalidate: true });
       }
@@ -202,7 +199,6 @@ export function useUser() {
       return result;
     } catch (error) {
       console.error('[Auth] Logout error:', error);
-      // Revalidate on error to ensure correct state
       await mutate(undefined, { revalidate: true });
       return {
         ok: false,
@@ -212,7 +208,6 @@ export function useUser() {
   };
 
   const register = async (user: InsertUser) => {
-    // Clear guest ID on registration
     localStorage.removeItem(GUEST_ID_KEY);
     return handleAuthRequest("/register", "POST", user);
   };
