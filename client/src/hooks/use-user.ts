@@ -1,17 +1,19 @@
 import useSWR from "swr";
 import type { User, InsertUser } from "db/schema";
 
+interface ExtendedUser extends User {
+  isGuest?: boolean;
+}
+
 export function useUser() {
-  const { data, error, mutate } = useSWR<User>("/api/user", {
+  const { data, error, mutate } = useSWR<ExtendedUser>("/api/user", {
     revalidateOnFocus: false,
     shouldRetryOnError: false,
     revalidateOnReconnect: false,
     refreshInterval: 0,
     dedupingInterval: 30000,
     onError: (err) => {
-      if (err.status !== 401) {
-        console.error('[Auth] Error fetching user:', err);
-      }
+      console.error('[Auth] Error fetching user:', err);
     }
   });
 

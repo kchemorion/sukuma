@@ -257,11 +257,17 @@ export function setupAuth(app: Express) {
     console.log('[Auth] User info request:', { 
       authenticated: req.isAuthenticated(),
       sessionID: req.sessionID,
-      user: req.user ? { id: req.user.id, username: req.user.username } : null
+      user: req.user ? { id: req.user.id, username: req.user.username } : 'guest'
     });
-    
+
     if (!req.isAuthenticated() || !req.user) {
-      return res.status(401).json({ message: "Unauthorized" });
+      // Return guest user object for unauthenticated users
+      return res.json({
+        id: 0,
+        username: 'Guest',
+        points: 0,
+        isGuest: true
+      });
     }
 
     // Ensure session is properly saved and extended
@@ -273,7 +279,7 @@ export function setupAuth(app: Express) {
       }
 
       const { id, username, points } = req.user;
-      res.json({ id, username, points });
+      res.json({ id, username, points, isGuest: false });
     });
   });
 }
