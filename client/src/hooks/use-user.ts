@@ -18,10 +18,12 @@ interface GuestPreferences {
 const GUEST_ID_KEY = 'guest_user_id';
 const RETRY_COUNT = 3;
 const RETRY_INTERVAL = 2000;
+const NETWORK_TIMEOUT = 10000; // 10 seconds timeout
 
 export function useUser() {
   const [retryCount, setRetryCount] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [lastError, setLastError] = useState<string | null>(null);
 
   const { data: user, error: userError, mutate } = useSWR<ExtendedUser>("/api/user", {
     revalidateOnFocus: true,
@@ -30,27 +32,44 @@ export function useUser() {
     refreshInterval: 30000,
     dedupingInterval: 5000,
     onError: async (err) => {
-      console.error('[Auth] Error fetching user:', err);
+      console.error('[Auth] Error fetching user:', {
+        error: err?.message || 'Unknown error',
+        status: err?.status,
+        timestamp: new Date().toISOString()
+      });
+      
+      setLastError(err?.message || 'Authentication error occurred');
       
       if (retryCount < RETRY_COUNT) {
         setIsRetrying(true);
+        console.log(`[Auth] Retry attempt ${retryCount + 1} of ${RETRY_COUNT}`);
+        
         setTimeout(async () => {
           setRetryCount(prev => prev + 1);
-          await mutate();
-        }, RETRY_INTERVAL);
+          try {
+            await mutate();
+          } catch (retryError) {
+            console.error('[Auth] Retry failed:', retryError);
+          }
+        }, RETRY_INTERVAL * (retryCount + 1)); // Exponential backoff
         return;
       }
 
+      // After all retries failed, attempt guest login
       try {
         const existingGuestId = localStorage.getItem(GUEST_ID_KEY);
+        console.log('[Auth] Attempting guest login fallback');
+        
         const result = await handleAuthRequest("/guest-login", "POST", undefined, existingGuestId);
         
         if (result.ok && result.data?.user) {
+          console.log('[Auth] Guest login successful');
           if (result.data.guestId) {
             localStorage.setItem(GUEST_ID_KEY, result.data.guestId);
           }
           await mutate(result.data.user, false);
         } else {
+          console.warn('[Auth] Guest login failed, using default guest user');
           await mutate({
             id: 0,
             username: 'Guest',
@@ -60,7 +79,10 @@ export function useUser() {
           }, false);
         }
       } catch (e) {
-        console.error('[Auth] Failed to restore guest session:', e);
+        console.error('[Auth] Failed to restore guest session:', {
+          error: e instanceof Error ? e.message : 'Unknown error',
+          timestamp: new Date().toISOString()
+        });
         await mutate({
           id: 0,
           username: 'Guest',
@@ -85,17 +107,21 @@ export function useUser() {
       },
       onError: (err) => {
         if (!preferencesError || (err?.status !== 401 && err?.status !== 404)) {
-          console.error('[Auth] Error fetching guest preferences:', err);
+          console.error('[Auth] Error fetching guest preferences:', {
+            error: err?.message || 'Unknown error',
+            status: err?.status,
+            timestamp: new Date().toISOString()
+          });
         }
       }
     }
   );
 
-  // Reset retry count when component unmounts
   useEffect(() => {
     return () => {
       setRetryCount(0);
       setIsRetrying(false);
+      setLastError(null);
     };
   }, []);
 
@@ -115,34 +141,56 @@ export function useUser() {
         headers['X-Guest-ID'] = guestId;
       }
 
-      const response = await fetch(url, {
-        method,
-        headers,
-        body: body ? JSON.stringify(body) : undefined,
-        credentials: 'include'
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), NETWORK_TIMEOUT);
 
-      const data = await response.json();
+      try {
+        const response = await fetch(url, {
+          method,
+          headers,
+          body: body ? JSON.stringify(body) : undefined,
+          credentials: 'include',
+          signal: controller.signal
+        });
 
-      if (!response.ok) {
-        if (response.status === 401) {
-          await mutate(undefined, { revalidate: false });
-          localStorage.removeItem(GUEST_ID_KEY);
+        clearTimeout(timeoutId);
+        const data = await response.json();
+
+        if (!response.ok) {
+          if (response.status === 401) {
+            console.warn('[Auth] Session expired or invalid');
+            await mutate(undefined, { revalidate: false });
+            localStorage.removeItem(GUEST_ID_KEY);
+          }
+          return { 
+            ok: false, 
+            message: data?.message || `Authentication failed: ${response.statusText}`,
+            status: response.status 
+          };
         }
+
+        await mutate(data.user || undefined, { revalidate: true });
+        return { ok: true, data };
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    } catch (e) {
+      if (e instanceof Error) {
+        const isTimeout = e.name === 'AbortError';
+        console.error('[Auth] Network error:', {
+          type: isTimeout ? 'timeout' : 'network',
+          error: e.message,
+          timestamp: new Date().toISOString()
+        });
         return { 
           ok: false, 
-          message: data?.message || `Authentication failed: ${response.statusText}`,
-          status: response.status 
+          message: isTimeout ? 'Request timed out' : e.message,
+          status: isTimeout ? 408 : 0
         };
       }
-
-      await mutate(data.user || undefined, { revalidate: true });
-      return { ok: true, data };
-    } catch (e) {
-      console.error('[Auth] Network error:', e);
       return { 
         ok: false, 
-        message: e instanceof Error ? e.message : 'Network error occurred',
+        message: 'Network error occurred',
         status: 0
       };
     }
@@ -158,29 +206,42 @@ export function useUser() {
     }
 
     try {
-      const response = await fetch("/api/guest-preferences", {
-        method: "POST",
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Guest-ID': user.guestId
-        },
-        body: JSON.stringify(newPreferences),
-        credentials: 'include'
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), NETWORK_TIMEOUT);
 
-      const data = await response.json();
+      try {
+        const response = await fetch("/api/guest-preferences", {
+          method: "POST",
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Guest-ID': user.guestId
+          },
+          body: JSON.stringify(newPreferences),
+          credentials: 'include',
+          signal: controller.signal
+        });
 
-      if (!response.ok) {
-        return {
-          ok: false,
-          message: data.error || "Failed to update preferences",
-          status: response.status
-        };
+        clearTimeout(timeoutId);
+        const data = await response.json();
+
+        if (!response.ok) {
+          return {
+            ok: false,
+            message: data.error || "Failed to update preferences",
+            status: response.status
+          };
+        }
+
+        await mutatePreferences(data.preferences);
+        return { ok: true, data };
+      } finally {
+        clearTimeout(timeoutId);
       }
-
-      await mutatePreferences(data.preferences);
-      return { ok: true, data };
     } catch (error) {
+      console.error('[Auth] Preferences update error:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
+      });
       return {
         ok: false,
         message: error instanceof Error ? error.message : "Failed to update preferences",
@@ -191,12 +252,14 @@ export function useUser() {
 
   const login = async (user: InsertUser) => {
     localStorage.removeItem(GUEST_ID_KEY);
+    setLastError(null);
     return handleAuthRequest("/login", "POST", user);
   };
 
   const guestLogin = async () => {
     try {
       const existingGuestId = localStorage.getItem(GUEST_ID_KEY);
+      setLastError(null);
       const result = await handleAuthRequest("/guest-login", "POST", undefined, existingGuestId);
       
       if (result.ok && result.data?.guestId) {
@@ -205,7 +268,10 @@ export function useUser() {
       
       return result;
     } catch (error) {
-      console.error('[Auth] Guest login error:', error);
+      console.error('[Auth] Guest login error:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
+      });
       return {
         ok: false,
         message: error instanceof Error ? error.message : "Guest login failed",
@@ -217,18 +283,23 @@ export function useUser() {
   const logout = async () => {
     try {
       localStorage.removeItem(GUEST_ID_KEY);
+      setLastError(null);
       await mutate(undefined, { revalidate: false });
       await mutatePreferences(undefined, false);
       
       const result = await handleAuthRequest("/logout", "POST");
       
       if (!result.ok) {
+        console.warn('[Auth] Logout failed, forcing client-side logout');
         await mutate(undefined, { revalidate: true });
       }
       
       return result;
     } catch (error) {
-      console.error('[Auth] Logout error:', error);
+      console.error('[Auth] Logout error:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
+      });
       await mutate(undefined, { revalidate: true });
       return {
         ok: false,
@@ -240,6 +311,7 @@ export function useUser() {
 
   const register = async (user: InsertUser) => {
     localStorage.removeItem(GUEST_ID_KEY);
+    setLastError(null);
     return handleAuthRequest("/register", "POST", user);
   };
 
@@ -250,6 +322,7 @@ export function useUser() {
     isRetrying,
     isError: userError && userError.status !== 401,
     error: userError,
+    lastError,
     preferencesError,
     login,
     guestLogin,
