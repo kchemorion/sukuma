@@ -32,11 +32,19 @@ if (!process.env.SESSION_SECRET) {
 
 const isProduction = process.env.NODE_ENV === "production";
 const isReplit = process.env.REPL_ID && process.env.REPL_OWNER && process.env.REPL_SLUG;
-const domain = isReplit 
-  ? `${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
-  : isProduction 
-    ? process.env.APP_DOMAIN 
-    : 'localhost:5000';
+
+// Improved domain configuration
+const getDomain = () => {
+  if (isReplit) {
+    return `${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`;
+  }
+  if (isProduction && process.env.APP_DOMAIN) {
+    return process.env.APP_DOMAIN;
+  }
+  return 'localhost:5000';
+};
+
+const domain = getDomain();
 
 // Configure PostgreSQL session store with enhanced connection handling
 const PostgresqlStore = connectPg(session);
@@ -72,7 +80,7 @@ sessionPool.on('connect', () => {
     const server = createServer(app);
 
     // Configure trust proxy for secure cookies behind Replit proxy
-    app.set('trust proxy', 1);
+    app.set('trust proxy', isReplit || isProduction ? 1 : 0);
 
     // Basic middleware with enhanced error handling
     app.use(express.json({
@@ -88,49 +96,42 @@ sessionPool.on('connect', () => {
     }));
     app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-    // Enhanced CORS configuration for Replit with proper error handling
+    // Simplified and more secure CORS configuration
     const corsOptions = {
-      origin: function(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
-        try {
-          if (!origin) {
-            callback(null, true);
-            return;
-          }
+      origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+        if (!origin && !isProduction) {
+          callback(null, true);
+          return;
+        }
 
-          const allowedOrigins = [
-            `https://${domain}`,
-            `http://${domain}`,
-            'http://localhost:5000',
-            'http://localhost:3000'
-          ];
+        const allowedDomains = [
+          domain,
+          'localhost',
+          'localhost:5000',
+          'localhost:3000'
+        ];
 
-          // Enhanced Replit domain handling with proper wildcard support
-          if (isReplit) {
-            allowedOrigins.push(
-              'https://*.repl.co',
-              `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`,
-              `https://${process.env.REPL_SLUG}--${process.env.REPL_OWNER}.repl.co`
-            );
-          }
+        // Add Replit-specific domains
+        if (isReplit) {
+          allowedDomains.push(
+            '.repl.co',
+            `${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`,
+            `${process.env.REPL_SLUG}--${process.env.REPL_OWNER}.repl.co`
+          );
+        }
 
-          // Improved origin matching with wildcard support
-          const isAllowed = allowedOrigins.some(pattern => {
-            if (pattern.includes('*')) {
-              const regexPattern = pattern.replace(/\./g, '\\.').replace(/\*/g, '.*');
-              return new RegExp(`^${regexPattern}$`).test(origin);
-            }
-            return pattern === origin;
-          });
+        const isAllowed = origin && (
+          allowedDomains.some(domain => 
+            origin.includes(domain) || 
+            (domain.startsWith('.') && origin.endsWith(domain))
+          ) || !isProduction
+        );
 
-          if (isAllowed || !isProduction) {
-            callback(null, true);
-          } else {
-            console.warn('[CORS] Blocked request from:', origin);
-            callback(new Error('Not allowed by CORS'));
-          }
-        } catch (error) {
-          console.error('[CORS] Error processing origin:', error);
-          callback(new Error('CORS configuration error'));
+        if (isAllowed) {
+          callback(null, true);
+        } else {
+          console.warn('[CORS] Blocked request from:', origin);
+          callback(new Error('Not allowed by CORS'));
         }
       },
       credentials: true,
@@ -153,7 +154,7 @@ sessionPool.on('connect', () => {
 
     app.use(cors(corsOptions));
 
-    // Create session table if it doesn't exist with better error handling
+    // Create session table if it doesn't exist
     try {
       await sessionPool.query(`
         CREATE TABLE IF NOT EXISTS "session" (
@@ -169,7 +170,7 @@ sessionPool.on('connect', () => {
       throw error;
     }
 
-    // Enhanced session store configuration with better error handling
+    // Enhanced session store configuration
     const sessionStore = new PostgresqlStore({
       pool: sessionPool,
       tableName: 'session',
@@ -185,7 +186,17 @@ sessionPool.on('connect', () => {
       console.error('[Session Store] Connection error:', error);
     });
 
-    // Enhanced session middleware configuration with proper cookie settings for Replit
+    // Improved cookie settings for cross-origin access
+    const cookieSettings = {
+      secure: isProduction || isReplit,
+      httpOnly: true,
+      sameSite: (isProduction || isReplit) ? 'none' as const : 'lax' as const,
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      path: '/',
+      domain: isReplit ? '.repl.co' : undefined
+    };
+
+    // Enhanced session middleware configuration
     const sessionMiddleware = session({
       store: sessionStore,
       secret: process.env.SESSION_SECRET!,
@@ -193,18 +204,11 @@ sessionPool.on('connect', () => {
       resave: false,
       saveUninitialized: false,
       rolling: true,
-      proxy: true,
-      cookie: {
-        secure: true, // Always use secure cookies
-        httpOnly: true,
-        sameSite: 'none', // Required for cross-site cookies
-        maxAge: 24 * 60 * 60 * 1000, // 24 hours
-        path: '/',
-        domain: isReplit ? '.repl.co' : undefined // Allow all Replit subdomains
-      }
+      proxy: isProduction || isReplit,
+      cookie: cookieSettings
     });
 
-    // API middleware to ensure JSON responses
+    // API middleware
     app.use('/api', (req: Request, res: Response, next: NextFunction) => {
       res.setHeader('Content-Type', 'application/json');
       next();
@@ -215,10 +219,9 @@ sessionPool.on('connect', () => {
     app.use(passport.initialize());
     app.use(passport.session());
 
-    // Enhanced session monitoring middleware with better error handling
+    // Enhanced session monitoring middleware
     app.use((req: Request, res: Response, next: NextFunction) => {
       if (!req.session) {
-        const error = new Error('Session unavailable');
         console.error('[Session] No session found for request:', {
           path: req.path,
           method: req.method,
@@ -247,7 +250,7 @@ sessionPool.on('connect', () => {
       });
     });
 
-    // Health check endpoint with enhanced diagnostics
+    // Health check endpoint
     app.get('/health', async (_req, res) => {
       try {
         const startTime = Date.now();
@@ -258,8 +261,8 @@ sessionPool.on('connect', () => {
           status: 'ok', 
           timestamp: new Date().toISOString(),
           environment: process.env.NODE_ENV || 'development',
-          isReplit: isReplit,
-          domain: domain,
+          isReplit,
+          domain,
           responseTime: duration,
           database: {
             connected: true,
@@ -298,18 +301,14 @@ sessionPool.on('connect', () => {
       process.exit(1);
     });
 
-    // Listen with proper error handling and connection timeout
+    // Listen with proper error handling
     await new Promise<void>((resolve, reject) => {
       const serverInstance = server.listen(PORT, "0.0.0.0", () => {
         console.log(`[Server] Running at http://0.0.0.0:${PORT}`);
         console.log(`[Server] Environment: ${process.env.NODE_ENV || 'development'}`);
         console.log(`[Server] Running on Replit:`, isReplit);
         console.log(`[Server] Domain:`, domain);
-        console.log(`[Server] Session configuration:`, {
-          secure: true,
-          sameSite: 'none',
-          domain: isReplit ? '.repl.co' : undefined
-        });
+        console.log(`[Server] Cookie settings:`, cookieSettings);
         resolve();
       }).on('error', reject);
 
