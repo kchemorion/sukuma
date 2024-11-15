@@ -42,6 +42,8 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
+import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { Link } from "react-router-dom";
 
 interface ChannelWithSubscription extends Omit<Channel, 'subscriber_count'> {
   isSubscribed?: boolean;
@@ -66,17 +68,25 @@ export function Channels() {
   const [formErrors, setFormErrors] = useState<FormErrors>({});
   const formRef = useRef<HTMLFormElement>(null);
 
-  // Fetch channels with subscription status
+  // Fetch channels with subscription status and better error handling
   const { data: allChannels, error: channelsError } = useSWR<ChannelWithSubscription[]>(
     '/api/channels',
     async (url: string) => {
       const response = await fetch(url);
-      if (!response.ok) throw new Error('Failed to fetch channels');
+      if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error('You need to be logged in to access this feature');
+        }
+        throw new Error('Failed to fetch channels');
+      }
       const channels = await response.json();
       
       if (user) {
         // Fetch user's subscriptions and moderator status
         const subscriptionsResponse = await fetch(`/api/users/${user.id}/subscriptions`);
+        if (!subscriptionsResponse.ok) {
+          throw new Error('Failed to fetch subscriptions');
+        }
         const subscriptions = await subscriptionsResponse.json();
         
         return channels.map((channel: ChannelWithSubscription) => ({
@@ -274,28 +284,54 @@ export function Channels() {
     }
   };
 
-  // Loading state
+  // Guest user helper components
+  const GuestMessage = ({ action }: { action: string }) => (
+    <div className="text-center p-4 bg-muted/50 rounded-lg">
+      <h3 className="font-semibold mb-2">Join the Conversation!</h3>
+      <p className="text-sm text-muted-foreground mb-4">
+        Sign up or log in to {action} and unlock all features.
+      </p>
+      <div className="flex justify-center gap-4">
+        <Button variant="default" asChild>
+          <Link to="/register">Sign Up</Link>
+        </Button>
+        <Button variant="outline" asChild>
+          <Link to="/login">Log In</Link>
+        </Button>
+      </div>
+    </div>
+  );
+
+  // Loading state with better UI
   if (!allChannels && !channelsError) {
     return (
       <Layout>
-        <div className="flex items-center justify-center min-h-screen">
-          <Loader2 className="h-8 w-8 animate-spin" />
+        <div className="max-w-6xl mx-auto p-4">
+          <div className="flex items-center justify-center min-h-[200px]">
+            <div className="text-center">
+              <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+              <p className="text-muted-foreground">Loading channels...</p>
+            </div>
+          </div>
         </div>
       </Layout>
     );
   }
 
-  // Error state
+  // Error state with better error boundaries
   if (channelsError) {
     return (
       <Layout>
         <ErrorBoundary fallback={
-          <Alert variant="destructive">
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription>
-              Failed to load channels. Please try refreshing the page.
-            </AlertDescription>
-          </Alert>
+          <div className="max-w-6xl mx-auto p-4">
+            <Alert variant="destructive" className="mb-4">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                {channelsError.message}
+              </AlertDescription>
+            </Alert>
+            {!user && <GuestMessage action="access all features" />}
+          </div>
         }>
           <div className="max-w-6xl mx-auto p-4">
             <Alert variant="destructive">
@@ -315,87 +351,101 @@ export function Channels() {
       <div className="max-w-6xl mx-auto p-4">
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-2xl font-bold">Voice Communities</h1>
-          {user && (
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-              <DialogTrigger asChild>
-                <Button>
-                  <Plus className="h-4 w-4 mr-2" />
-                  New Community
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Create New Community</DialogTitle>
-                  <DialogDescription>
-                    Create a new voice community. All fields marked with * are required.
-                  </DialogDescription>
-                </DialogHeader>
-                <form ref={formRef} onSubmit={createChannel} className="space-y-4">
-                  <div>
-                    <Input
-                      placeholder="Community Name *"
-                      name="name"
-                      required
-                      minLength={3}
-                      maxLength={50}
-                      className={formErrors.name ? 'border-red-500' : ''}
-                    />
-                    {formErrors.name && (
-                      <p className="text-sm text-red-500 mt-1">{formErrors.name}</p>
-                    )}
-                  </div>
-                  <div>
-                    <Textarea
-                      placeholder="Community Description *"
-                      name="description"
-                      required
-                      minLength={10}
-                      maxLength={200}
-                      className={formErrors.description ? 'border-red-500' : ''}
-                    />
-                    {formErrors.description && (
-                      <p className="text-sm text-red-500 mt-1">{formErrors.description}</p>
-                    )}
-                  </div>
-                  <div>
-                    <Input
-                      placeholder="Categories (comma-separated)"
-                      name="categories"
-                      className={formErrors.categories ? 'border-red-500' : ''}
-                    />
-                    {formErrors.categories && (
-                      <p className="text-sm text-red-500 mt-1">{formErrors.categories}</p>
-                    )}
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      id="is_private"
-                      name="is_private"
-                      value="true"
-                    />
-                    <label htmlFor="is_private">Private Community</label>
-                  </div>
-                  <DialogFooter>
-                    <Button
-                      type="submit"
-                      className="w-full"
-                      disabled={isCreating}
-                    >
-                      {isCreating ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Creating...
-                        </>
-                      ) : (
-                        'Create Community'
+          <TooltipProvider>
+            {user ? (
+              <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button>
+                    <Plus className="h-4 w-4 mr-2" />
+                    New Community
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Create New Community</DialogTitle>
+                    <DialogDescription>
+                      Create a new voice community. All fields marked with * are required.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <form ref={formRef} onSubmit={createChannel} className="space-y-4">
+                    <div>
+                      <Input
+                        placeholder="Community Name *"
+                        name="name"
+                        required
+                        minLength={3}
+                        maxLength={50}
+                        className={formErrors.name ? 'border-red-500' : ''}
+                      />
+                      {formErrors.name && (
+                        <p className="text-sm text-red-500 mt-1">{formErrors.name}</p>
                       )}
-                    </Button>
-                  </DialogFooter>
-                </form>
-              </DialogContent>
-            </Dialog>
-          )}
+                    </div>
+                    <div>
+                      <Textarea
+                        placeholder="Community Description *"
+                        name="description"
+                        required
+                        minLength={10}
+                        maxLength={200}
+                        className={formErrors.description ? 'border-red-500' : ''}
+                      />
+                      {formErrors.description && (
+                        <p className="text-sm text-red-500 mt-1">{formErrors.description}</p>
+                      )}
+                    </div>
+                    <div>
+                      <Input
+                        placeholder="Categories (comma-separated)"
+                        name="categories"
+                        className={formErrors.categories ? 'border-red-500' : ''}
+                      />
+                      {formErrors.categories && (
+                        <p className="text-sm text-red-500 mt-1">{formErrors.categories}</p>
+                      )}
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="is_private"
+                        name="is_private"
+                        value="true"
+                      />
+                      <label htmlFor="is_private">Private Community</label>
+                    </div>
+                    <DialogFooter>
+                      <Button
+                        type="submit"
+                        className="w-full"
+                        disabled={isCreating}
+                      >
+                        {isCreating ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Creating...
+                          </>
+                        ) : (
+                          'Create Community'
+                        )}
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            ) : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="secondary" disabled>
+                    <Plus className="h-4 w-4 mr-2" />
+                    New Community
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Sign in to create a new community</p>
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </TooltipProvider>
         </div>
 
         <Tabs value={viewMode} onValueChange={(value: 'all' | 'trending' | 'recommended' | 'categories') => setViewMode(value)}>
@@ -408,17 +458,34 @@ export function Channels() {
               <TrendingUp className="h-4 w-4 mr-2" />
               Trending
             </TabsTrigger>
-            {user && (
+            {user ? (
               <TabsTrigger value="recommended">
                 <Award className="h-4 w-4 mr-2" />
                 Recommended
               </TabsTrigger>
+            ) : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <TabsTrigger value="recommended" disabled>
+                    <Award className="h-4 w-4 mr-2" />
+                    Recommended
+                  </TabsTrigger>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Sign in to see personalized recommendations</p>
+                </TooltipContent>
+              </Tooltip>
             )}
             <TabsTrigger value="categories">
               <Hash className="h-4 w-4 mr-2" />
               Categories
             </TabsTrigger>
           </TabsList>
+
+          {/* Show guest message when trying to access recommended tab */}
+          {!user && viewMode === 'recommended' && (
+            <GuestMessage action="get personalized recommendations" />
+          )}
 
           <div className="grid md:grid-cols-[300px,1fr] gap-6">
             <div className="space-y-4">
@@ -464,7 +531,7 @@ export function Channels() {
                           </div>
                         )}
                       </div>
-                      {user && (
+                      {user ? (
                         <Button
                           variant={channel.isSubscribed ? "secondary" : "default"}
                           size="sm"
@@ -475,6 +542,21 @@ export function Channels() {
                         >
                           {channel.isSubscribed ? 'Joined' : 'Join'}
                         </Button>
+                      ) : (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              disabled
+                            >
+                              Join
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Sign in to join communities</p>
+                          </TooltipContent>
+                        </Tooltip>
                       )}
                     </div>
                     <div className="mt-2 flex items-center space-x-4 text-sm text-muted-foreground">
@@ -501,15 +583,15 @@ export function Channels() {
                   </Card>
                 ))
               ) : (
-                <div className="text-center p-8 border-2 border-dashed rounded-lg">
-                  <p className="text-muted-foreground">
-                    No communities available
+                <div className="text-center p-8 bg-muted/50 rounded-lg">
+                  <AlertCircle className="h-8 w-8 mx-auto mb-4 text-muted-foreground" />
+                  <h3 className="font-semibold mb-2">No Channels Found</h3>
+                  <p className="text-sm text-muted-foreground">
+                    {user ? 
+                      "Be the first to create a community!" :
+                      "Join us to create and discover voice communities!"
+                    }
                   </p>
-                  {user && viewMode === 'all' && (
-                    <p className="text-sm text-muted-foreground mt-2">
-                      Create a new community to get started
-                    </p>
-                  )}
                 </div>
               )}
             </div>
