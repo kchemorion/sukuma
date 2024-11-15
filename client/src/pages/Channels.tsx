@@ -15,6 +15,7 @@ import {
   DialogTitle,
   DialogTrigger,
   DialogFooter,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import { useToast } from '@/hooks/use-toast';
 import { 
@@ -48,6 +49,12 @@ interface ChannelWithSubscription extends Omit<Channel, 'subscriber_count'> {
   subscriber_count?: number;
 }
 
+interface FormErrors {
+  name?: string;
+  description?: string;
+  categories?: string;
+}
+
 export function Channels() {
   const { user } = useUser();
   const { toast } = useToast();
@@ -55,6 +62,9 @@ export function Channels() {
   const [selectedChannel, setSelectedChannel] = useState<number | null>(null);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'all' | 'trending' | 'recommended' | 'categories'>('all');
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [formErrors, setFormErrors] = useState<FormErrors>({});
+  const formRef = useRef<HTMLFormElement>(null);
 
   // Fetch channels with subscription status
   const { data: allChannels, error: channelsError } = useSWR<ChannelWithSubscription[]>(
@@ -133,6 +143,101 @@ export function Channels() {
     }
   );
 
+  const validateForm = (formData: FormData): boolean => {
+    const errors: FormErrors = {};
+    const name = formData.get('name') as string;
+    const description = formData.get('description') as string;
+    const categories = formData.get('categories') as string;
+
+    if (!name?.trim()) {
+      errors.name = 'Channel name is required';
+    } else if (name.length < 3) {
+      errors.name = 'Channel name must be at least 3 characters';
+    }
+
+    if (!description?.trim()) {
+      errors.description = 'Description is required';
+    } else if (description.length < 10) {
+      errors.description = 'Description must be at least 10 characters';
+    }
+
+    if (categories) {
+      const categoryArray = categories.split(',').map(cat => cat.trim());
+      if (categoryArray.some(cat => cat.length < 2)) {
+        errors.categories = 'Each category must be at least 2 characters';
+      }
+    }
+
+    setFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const createChannel = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    
+    if (!user) {
+      toast({
+        title: 'Error',
+        description: 'You must be logged in to create a channel',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    
+    if (!validateForm(formData)) {
+      return;
+    }
+
+    setIsCreating(true);
+    
+    try {
+      const categories = (formData.get('categories') as string || '')
+        .split(',')
+        .map(cat => cat.trim())
+        .filter(Boolean);
+
+      const response = await fetch('/api/channels', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: formData.get('name'),
+          description: formData.get('description'),
+          rules: [],
+          categories,
+          is_private: formData.get('is_private') === 'true',
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.details || data.error || 'Failed to create channel');
+      }
+
+      toast({
+        title: 'Success',
+        description: 'Channel created successfully',
+      });
+
+      formRef.current?.reset();
+      setIsDialogOpen(false);
+      mutate('/api/channels');
+    } catch (error) {
+      console.error('[Channels] Error creating channel:', error);
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to create channel',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
   const handleSubscribe = async (channelId: number) => {
     if (!user) {
       toast({
@@ -166,55 +271,6 @@ export function Channels() {
         description: 'Failed to update subscription',
         variant: 'destructive',
       });
-    }
-  };
-
-  const createChannel = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setIsCreating(true);
-    const formData = new FormData(event.currentTarget);
-    
-    try {
-      const categories = (formData.get('categories') as string || '')
-        .split(',')
-        .map(cat => cat.trim())
-        .filter(Boolean);
-
-      const response = await fetch('/api/channels', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: formData.get('name'),
-          description: formData.get('description'),
-          rules: [],
-          categories,
-          is_private: formData.get('is_private') === 'true',
-        }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to create channel');
-      }
-
-      toast({
-        title: 'Success',
-        description: 'Channel created successfully',
-      });
-
-      (event.target as HTMLFormElement).reset();
-      mutate('/api/channels');
-    } catch (error) {
-      console.error('[Channels] Error creating channel:', error);
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to create channel',
-        variant: 'destructive',
-      });
-    } finally {
-      setIsCreating(false);
     }
   };
 
@@ -260,7 +316,7 @@ export function Channels() {
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-2xl font-bold">Voice Communities</h1>
           {user && (
-            <Dialog>
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
               <DialogTrigger asChild>
                 <Button>
                   <Plus className="h-4 w-4 mr-2" />
@@ -270,31 +326,46 @@ export function Channels() {
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Create New Community</DialogTitle>
+                  <DialogDescription>
+                    Create a new voice community. All fields marked with * are required.
+                  </DialogDescription>
                 </DialogHeader>
-                <form onSubmit={createChannel} className="space-y-4">
+                <form ref={formRef} onSubmit={createChannel} className="space-y-4">
                   <div>
                     <Input
-                      placeholder="Community Name"
+                      placeholder="Community Name *"
                       name="name"
                       required
                       minLength={3}
                       maxLength={50}
+                      className={formErrors.name ? 'border-red-500' : ''}
                     />
+                    {formErrors.name && (
+                      <p className="text-sm text-red-500 mt-1">{formErrors.name}</p>
+                    )}
                   </div>
                   <div>
                     <Textarea
-                      placeholder="Community Description"
+                      placeholder="Community Description *"
                       name="description"
                       required
                       minLength={10}
                       maxLength={200}
+                      className={formErrors.description ? 'border-red-500' : ''}
                     />
+                    {formErrors.description && (
+                      <p className="text-sm text-red-500 mt-1">{formErrors.description}</p>
+                    )}
                   </div>
                   <div>
                     <Input
                       placeholder="Categories (comma-separated)"
                       name="categories"
+                      className={formErrors.categories ? 'border-red-500' : ''}
                     />
+                    {formErrors.categories && (
+                      <p className="text-sm text-red-500 mt-1">{formErrors.categories}</p>
+                    )}
                   </div>
                   <div className="flex items-center space-x-2">
                     <input
@@ -306,7 +377,11 @@ export function Channels() {
                     <label htmlFor="is_private">Private Community</label>
                   </div>
                   <DialogFooter>
-                    <Button type="submit" className="w-full" disabled={isCreating}>
+                    <Button
+                      type="submit"
+                      className="w-full"
+                      disabled={isCreating}
+                    >
                       {isCreating ? (
                         <>
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
