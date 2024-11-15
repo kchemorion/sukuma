@@ -25,6 +25,7 @@ export const fetcher = async (url: string, init?: RequestInit) => {
     defaultOptions.headers = {
       ...defaultOptions.headers,
       'Origin': window.location.origin,
+      'X-Forwarded-Proto': 'https'
     };
   }
 
