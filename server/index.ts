@@ -74,70 +74,102 @@ sessionPool.on('connect', () => {
     // Configure trust proxy for secure cookies behind Replit proxy
     app.set('trust proxy', 1);
 
-    // Basic middleware
-    app.use(express.json());
-    app.use(express.urlencoded({ extended: true }));
+    // Basic middleware with enhanced error handling
+    app.use(express.json({
+      limit: '10mb',
+      verify: (req, res, buf) => {
+        try {
+          JSON.parse(buf.toString());
+        } catch (e) {
+          res.status(400).json({ error: 'Invalid JSON' });
+          throw new Error('Invalid JSON');
+        }
+      }
+    }));
+    app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-    // Enhanced CORS configuration for Replit
+    // Enhanced CORS configuration for Replit with proper error handling
     const corsOptions = {
       origin: function(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
-        if (!origin) {
-          callback(null, true);
-          return;
-        }
-
-        const allowedOrigins = [
-          `https://${domain}`,
-          `http://${domain}`,
-          'http://localhost:5000',
-          'http://localhost:3000'
-        ];
-
-        // Add Replit-specific origins and allow all subdomains
-        if (isReplit) {
-          allowedOrigins.push(
-            `https://*.repl.co`,
-            `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
-          );
-        }
-
-        // Check if the origin matches any allowed pattern
-        const isAllowed = allowedOrigins.some(pattern => {
-          if (pattern.includes('*')) {
-            const regexPattern = pattern.replace(/\./g, '\\.').replace(/\*/g, '.*');
-            return new RegExp(regexPattern).test(origin);
+        try {
+          if (!origin) {
+            callback(null, true);
+            return;
           }
-          return pattern === origin;
-        });
 
-        if (isAllowed || !isProduction) {
-          callback(null, true);
-        } else {
-          console.warn('[CORS] Blocked request from:', origin);
-          callback(new Error('Not allowed by CORS'));
+          const allowedOrigins = [
+            `https://${domain}`,
+            `http://${domain}`,
+            'http://localhost:5000',
+            'http://localhost:3000'
+          ];
+
+          // Enhanced Replit domain handling with proper wildcard support
+          if (isReplit) {
+            allowedOrigins.push(
+              'https://*.repl.co',
+              `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`,
+              `https://${process.env.REPL_SLUG}--${process.env.REPL_OWNER}.repl.co`
+            );
+          }
+
+          // Improved origin matching with wildcard support
+          const isAllowed = allowedOrigins.some(pattern => {
+            if (pattern.includes('*')) {
+              const regexPattern = pattern.replace(/\./g, '\\.').replace(/\*/g, '.*');
+              return new RegExp(`^${regexPattern}$`).test(origin);
+            }
+            return pattern === origin;
+          });
+
+          if (isAllowed || !isProduction) {
+            callback(null, true);
+          } else {
+            console.warn('[CORS] Blocked request from:', origin);
+            callback(new Error('Not allowed by CORS'));
+          }
+        } catch (error) {
+          console.error('[CORS] Error processing origin:', error);
+          callback(new Error('CORS configuration error'));
         }
       },
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'X-Guest-Id'],
+      allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'Accept',
+        'X-Requested-With',
+        'X-Guest-Id',
+        'Origin',
+        'Access-Control-Request-Method',
+        'Access-Control-Request-Headers'
+      ],
       exposedHeaders: ['Set-Cookie'],
-      maxAge: 86400
+      maxAge: 86400,
+      preflightContinue: false,
+      optionsSuccessStatus: 204
     };
 
     app.use(cors(corsOptions));
 
-    // Create session table if it doesn't exist
-    await sessionPool.query(`
-      CREATE TABLE IF NOT EXISTS "session" (
-        "sid" varchar NOT NULL COLLATE "default",
-        "sess" json NOT NULL,
-        "expire" timestamp(6) NOT NULL,
-        CONSTRAINT "session_pkey" PRIMARY KEY ("sid")
-      );
-      CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
-    `);
+    // Create session table if it doesn't exist with better error handling
+    try {
+      await sessionPool.query(`
+        CREATE TABLE IF NOT EXISTS "session" (
+          "sid" varchar NOT NULL COLLATE "default",
+          "sess" json NOT NULL,
+          "expire" timestamp(6) NOT NULL,
+          CONSTRAINT "session_pkey" PRIMARY KEY ("sid")
+        );
+        CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
+      `);
+    } catch (error) {
+      console.error('[Database] Error creating session table:', error);
+      throw error;
+    }
 
-    // Enhanced session store configuration
+    // Enhanced session store configuration with better error handling
     const sessionStore = new PostgresqlStore({
       pool: sessionPool,
       tableName: 'session',
@@ -183,16 +215,20 @@ sessionPool.on('connect', () => {
     app.use(passport.initialize());
     app.use(passport.session());
 
-    // Enhanced session monitoring middleware
-    app.use((req: Request, _res: Response, next: NextFunction) => {
+    // Enhanced session monitoring middleware with better error handling
+    app.use((req: Request, res: Response, next: NextFunction) => {
       if (!req.session) {
+        const error = new Error('Session unavailable');
         console.error('[Session] No session found for request:', {
           path: req.path,
           method: req.method,
           ip: req.ip,
           headers: req.headers
         });
-        return next(new Error('Session unavailable'));
+        return res.status(500).json({
+          error: 'Session Error',
+          message: 'Unable to establish session'
+        });
       }
       next();
     });
@@ -201,11 +237,12 @@ sessionPool.on('connect', () => {
     setupAuth(app);
     registerRoutes(app);
 
-    // API error handler to ensure JSON responses
+    // Enhanced API error handler
     app.use('/api', (err: Error, _req: Request, res: Response, _next: NextFunction) => {
       console.error('[API Error]', err);
-      res.status(500).json({
-        error: 'Internal Server Error',
+      const statusCode = err.message.includes('Not allowed by CORS') ? 403 : 500;
+      res.status(statusCode).json({
+        error: statusCode === 403 ? 'Forbidden' : 'Internal Server Error',
         message: process.env.NODE_ENV === 'development' ? err.message : 'An unexpected error occurred'
       });
     });
@@ -213,13 +250,17 @@ sessionPool.on('connect', () => {
     // Health check endpoint with enhanced diagnostics
     app.get('/health', async (_req, res) => {
       try {
+        const startTime = Date.now();
         await sessionPool.query('SELECT NOW()');
+        const duration = Date.now() - startTime;
+        
         res.json({ 
           status: 'ok', 
           timestamp: new Date().toISOString(),
           environment: process.env.NODE_ENV || 'development',
           isReplit: isReplit,
           domain: domain,
+          responseTime: duration,
           database: {
             connected: true,
             totalConnections: sessionPool.totalCount,
@@ -228,7 +269,8 @@ sessionPool.on('connect', () => {
           }
         });
       } catch (error) {
-        res.status(500).json({
+        console.error('[Health Check] Database error:', error);
+        res.status(503).json({
           status: 'error',
           timestamp: new Date().toISOString(),
           error: 'Database connection failed',
@@ -256,9 +298,9 @@ sessionPool.on('connect', () => {
       process.exit(1);
     });
 
-    // Listen with proper error handling
+    // Listen with proper error handling and connection timeout
     await new Promise<void>((resolve, reject) => {
-      server.listen(PORT, "0.0.0.0", () => {
+      const serverInstance = server.listen(PORT, "0.0.0.0", () => {
         console.log(`[Server] Running at http://0.0.0.0:${PORT}`);
         console.log(`[Server] Environment: ${process.env.NODE_ENV || 'development'}`);
         console.log(`[Server] Running on Replit:`, isReplit);
@@ -270,6 +312,10 @@ sessionPool.on('connect', () => {
         });
         resolve();
       }).on('error', reject);
+
+      // Set keep-alive timeout
+      serverInstance.keepAliveTimeout = 65000;
+      serverInstance.headersTimeout = 66000;
     });
 
   } catch (error) {
@@ -287,4 +333,17 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[Server] Unhandled Rejection at:', promise, 'reason:', reason);
   process.exit(1);
+});
+
+// Handle graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('[Server] SIGTERM received. Starting graceful shutdown...');
+  try {
+    await sessionPool.end();
+    console.log('[Server] Database connections closed');
+    process.exit(0);
+  } catch (error) {
+    console.error('[Server] Error during shutdown:', error);
+    process.exit(1);
+  }
 });
