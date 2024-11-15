@@ -31,21 +31,25 @@ if (!process.env.SESSION_SECRET) {
 }
 
 const isProduction = process.env.NODE_ENV === "production";
-const domain = isProduction 
+const isReplit = process.env.REPL_ID && process.env.REPL_OWNER && process.env.REPL_SLUG;
+const domain = isReplit 
   ? `${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
-  : 'localhost:5000';
+  : isProduction 
+    ? process.env.APP_DOMAIN 
+    : 'localhost:5000';
 
 // Configure PostgreSQL session store with enhanced connection handling
 const PostgresqlStore = connectPg(session);
 const sessionPool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  max: 20,
+  max: isProduction ? 20 : 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
   keepAlive: true,
-  ssl: isProduction ? { rejectUnauthorized: false } : false,
+  ssl: isProduction || isReplit ? { rejectUnauthorized: false } : false,
   statement_timeout: 30000,
-  query_timeout: 30000
+  query_timeout: 30000,
+  application_name: 'sukuma_session_store'
 });
 
 // Enhanced connection pool error handling
@@ -67,14 +71,14 @@ sessionPool.on('connect', () => {
     const app = express();
     const server = createServer(app);
 
-    // Configure trust proxy for secure cookies
+    // Configure trust proxy for secure cookies behind Replit proxy
     app.set('trust proxy', 1);
 
     // Basic middleware
     app.use(express.json());
     app.use(express.urlencoded({ extended: true }));
 
-    // Enhanced CORS configuration
+    // Enhanced CORS configuration for Replit
     const corsOptions = {
       origin: function(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
         if (!origin) {
@@ -86,9 +90,16 @@ sessionPool.on('connect', () => {
           `https://${domain}`,
           `http://${domain}`,
           'http://localhost:5000',
-          'http://localhost:3000',
-          `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
+          'http://localhost:3000'
         ];
+
+        // Add Replit-specific origins
+        if (isReplit) {
+          allowedOrigins.push(
+            `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`,
+            `https://${domain}`
+          );
+        }
 
         if (allowedOrigins.includes(origin) || !isProduction) {
           callback(null, true);
@@ -117,7 +128,7 @@ sessionPool.on('connect', () => {
       CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
     `);
 
-    // Enhanced session store configuration with improved error handling
+    // Enhanced session store configuration
     const sessionStore = new PostgresqlStore({
       pool: sessionPool,
       tableName: 'session',
@@ -133,7 +144,7 @@ sessionPool.on('connect', () => {
       console.error('[Session Store] Connection error:', error);
     });
 
-    // Enhanced session middleware configuration with proper cookie settings
+    // Enhanced session middleware configuration with proper cookie settings for Replit
     const sessionMiddleware = session({
       store: sessionStore,
       secret: process.env.SESSION_SECRET!,
@@ -141,13 +152,14 @@ sessionPool.on('connect', () => {
       resave: false,
       saveUninitialized: false,
       rolling: true,
+      proxy: true,
       cookie: {
-        secure: isProduction,
+        secure: isProduction || isReplit,
         httpOnly: true,
-        sameSite: isProduction ? 'none' : 'lax',
+        sameSite: isProduction || isReplit ? 'none' : 'lax',
         maxAge: 24 * 60 * 60 * 1000, // 24 hours
         path: '/',
-        domain: isProduction ? `.${process.env.REPL_OWNER}.repl.co` : undefined
+        domain: isReplit ? `.${process.env.REPL_OWNER}.repl.co` : undefined
       }
     });
 
@@ -181,7 +193,7 @@ sessionPool.on('connect', () => {
     registerRoutes(app);
 
     // API error handler to ensure JSON responses
-    app.use('/api', (err: Error, _req: Request, res: Response, next: NextFunction) => {
+    app.use('/api', (err: Error, _req: Request, res: Response, _next: NextFunction) => {
       console.error('[API Error]', err);
       res.status(500).json({
         error: 'Internal Server Error',
@@ -197,6 +209,8 @@ sessionPool.on('connect', () => {
           status: 'ok', 
           timestamp: new Date().toISOString(),
           environment: process.env.NODE_ENV || 'development',
+          isReplit: isReplit,
+          domain: domain,
           database: {
             connected: true,
             totalConnections: sessionPool.totalCount,
@@ -238,10 +252,12 @@ sessionPool.on('connect', () => {
       server.listen(PORT, "0.0.0.0", () => {
         console.log(`[Server] Running at http://0.0.0.0:${PORT}`);
         console.log(`[Server] Environment: ${process.env.NODE_ENV || 'development'}`);
+        console.log(`[Server] Running on Replit:`, isReplit);
+        console.log(`[Server] Domain:`, domain);
         console.log(`[Server] Session configuration:`, {
-          secure: isProduction,
-          sameSite: isProduction ? 'none' : 'lax',
-          domain: isProduction ? `.${process.env.REPL_OWNER}.repl.co` : undefined
+          secure: isProduction || isReplit,
+          sameSite: isProduction || isReplit ? 'none' : 'lax',
+          domain: isReplit ? `.${process.env.REPL_OWNER}.repl.co` : undefined
         });
         resolve();
       }).on('error', reject);
