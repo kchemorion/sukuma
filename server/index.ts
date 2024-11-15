@@ -21,20 +21,40 @@ if (!fs.existsSync(uploadsDir)) {
   console.log('[Server] Created uploads directory');
 }
 
-// Environment configuration
+// Environment configuration with better validation
+if (!process.env.DATABASE_URL) {
+  throw new Error('DATABASE_URL environment variable is required');
+}
+
+if (!process.env.SESSION_SECRET) {
+  throw new Error('SESSION_SECRET environment variable is required');
+}
+
 const isProduction = process.env.NODE_ENV === "production";
 const domain = isProduction 
   ? `${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
   : 'localhost:5000';
 
-// Configure PostgreSQL session store with proper error handling
+// Configure PostgreSQL session store with enhanced connection handling
 const PostgresqlStore = connectPg(session);
 const sessionPool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: 20,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
-  keepAlive: true
+  connectionTimeoutMillis: 10000,
+  keepAlive: true,
+  ssl: isProduction ? { rejectUnauthorized: false } : false,
+  statement_timeout: 30000,
+  query_timeout: 30000
+});
+
+// Enhanced connection pool error handling
+sessionPool.on('error', (err) => {
+  console.error('[Database] Pool error:', err);
+});
+
+sessionPool.on('connect', () => {
+  console.log('[Database] New client connected');
 });
 
 // Verify database connection and initialize app
@@ -54,10 +74,9 @@ const sessionPool = new Pool({
     app.use(express.json());
     app.use(express.urlencoded({ extended: true }));
 
-    // Development-friendly CORS configuration
+    // Enhanced CORS configuration
     const corsOptions = {
       origin: function(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
-        // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) {
           callback(null, true);
           return;
@@ -79,39 +98,49 @@ const sessionPool = new Pool({
         }
       },
       credentials: true,
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'X-Guest-Id'],
       exposedHeaders: ['Set-Cookie'],
       maxAge: 86400
     };
 
     app.use(cors(corsOptions));
 
-    // Session store configuration with error handling
+    // Create session table if it doesn't exist
+    await sessionPool.query(`
+      CREATE TABLE IF NOT EXISTS "session" (
+        "sid" varchar NOT NULL COLLATE "default",
+        "sess" json NOT NULL,
+        "expire" timestamp(6) NOT NULL,
+        CONSTRAINT "session_pkey" PRIMARY KEY ("sid")
+      );
+      CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
+    `);
+
+    // Enhanced session store configuration with improved error handling
     const sessionStore = new PostgresqlStore({
       pool: sessionPool,
       tableName: 'session',
       createTableIfMissing: true,
-      pruneSessionInterval: 60 * 15, // Prune expired sessions every 15 minutes
+      pruneSessionInterval: 60 * 15,
       errorLog: (error: Error) => {
         console.error('[Session Store Error]', error);
       }
     });
 
-    if (!process.env.SESSION_SECRET) {
-      console.error('[Server] SESSION_SECRET environment variable is not set!');
-      process.exit(1);
-    }
+    // Verify session store
+    sessionStore.on('error', (error: Error) => {
+      console.error('[Session Store] Connection error:', error);
+    });
 
-    // Enhanced session middleware configuration
+    // Enhanced session middleware configuration with proper cookie settings
     const sessionMiddleware = session({
       store: sessionStore,
-      secret: process.env.SESSION_SECRET,
+      secret: process.env.SESSION_SECRET!,
       name: 'sukuma.sid',
       resave: false,
       saveUninitialized: false,
-      rolling: true, // Extends session on activity
-      proxy: true,
+      rolling: true,
       cookie: {
         secure: isProduction,
         httpOnly: true,
@@ -127,18 +156,16 @@ const sessionPool = new Pool({
     app.use(passport.initialize());
     app.use(passport.session());
 
-    // Session monitoring middleware
-    app.use((req, res, next) => {
+    // Enhanced session monitoring middleware
+    app.use((req: Request, _res: Response, next: NextFunction) => {
       if (!req.session) {
         console.error('[Session] No session found for request:', {
           path: req.path,
           method: req.method,
-          ip: req.ip
+          ip: req.ip,
+          headers: req.headers
         });
-      } else if (!req.session.touch) {
-        console.warn('[Session] Session object missing touch method');
-      } else {
-        req.session.touch();
+        return next(new Error('Session unavailable'));
       }
       next();
     });
@@ -147,13 +174,31 @@ const sessionPool = new Pool({
     setupAuth(app);
     registerRoutes(app);
 
-    // Health check endpoint
-    app.get('/health', (_req, res) => {
-      res.json({ 
-        status: 'ok', 
-        timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV || 'development'
-      });
+    // Health check endpoint with enhanced diagnostics
+    app.get('/health', async (_req, res) => {
+      try {
+        // Test database connection
+        await sessionPool.query('SELECT NOW()');
+        
+        res.json({ 
+          status: 'ok', 
+          timestamp: new Date().toISOString(),
+          environment: process.env.NODE_ENV || 'development',
+          database: {
+            connected: true,
+            totalConnections: sessionPool.totalCount,
+            idleConnections: sessionPool.idleCount,
+            waitingCount: sessionPool.waitingCount
+          }
+        });
+      } catch (error) {
+        res.status(500).json({
+          status: 'error',
+          timestamp: new Date().toISOString(),
+          error: 'Database connection failed',
+          details: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
     });
 
     // Enhanced error handling middleware
@@ -165,12 +210,13 @@ const sessionPool = new Pool({
         method: req.method,
         sessionID: req.sessionID,
         authenticated: req.isAuthenticated(),
-        userID: req.user?.id
+        userID: req.user?.id,
+        timestamp: new Date().toISOString()
       });
 
       res.status(500).json({ 
         error: 'Internal server error',
-        message: process.env.NODE_ENV === 'development' ? err.message : undefined
+        message: process.env.NODE_ENV === 'development' ? err.message : 'An unexpected error occurred'
       });
     });
 
@@ -184,7 +230,7 @@ const sessionPool = new Pool({
 
     const PORT = Number(process.env.PORT) || 5000;
     
-    // Create an error handler for the server
+    // Enhanced server error handling
     server.on('error', (error: NodeJS.ErrnoException) => {
       console.error('[Server] Failed to start:', error);
       if (error.code === 'EADDRINUSE') {
@@ -193,7 +239,7 @@ const sessionPool = new Pool({
       process.exit(1);
     });
 
-    // Listen with a Promise to ensure we actually bind to the port
+    // Listen with proper error handling
     await new Promise<void>((resolve, reject) => {
       server.listen(PORT, "0.0.0.0", () => {
         console.log(`[Server] Running at http://0.0.0.0:${PORT}`);
@@ -213,7 +259,7 @@ const sessionPool = new Pool({
   }
 })();
 
-// Handle unexpected errors
+// Global error handlers
 process.on('uncaughtException', (error) => {
   console.error('[Server] Uncaught Exception:', error);
   process.exit(1);
