@@ -93,15 +93,24 @@ sessionPool.on('connect', () => {
           'http://localhost:3000'
         ];
 
-        // Add Replit-specific origins
+        // Add Replit-specific origins and allow all subdomains
         if (isReplit) {
           allowedOrigins.push(
-            `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`,
-            `https://${domain}`
+            `https://*.repl.co`,
+            `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
           );
         }
 
-        if (allowedOrigins.includes(origin) || !isProduction) {
+        // Check if the origin matches any allowed pattern
+        const isAllowed = allowedOrigins.some(pattern => {
+          if (pattern.includes('*')) {
+            const regexPattern = pattern.replace(/\./g, '\\.').replace(/\*/g, '.*');
+            return new RegExp(regexPattern).test(origin);
+          }
+          return pattern === origin;
+        });
+
+        if (isAllowed || !isProduction) {
           callback(null, true);
         } else {
           console.warn('[CORS] Blocked request from:', origin);
@@ -154,12 +163,12 @@ sessionPool.on('connect', () => {
       rolling: true,
       proxy: true,
       cookie: {
-        secure: isProduction || isReplit,
+        secure: true, // Always use secure cookies
         httpOnly: true,
-        sameSite: isProduction || isReplit ? 'none' : 'lax',
+        sameSite: 'none', // Required for cross-site cookies
         maxAge: 24 * 60 * 60 * 1000, // 24 hours
         path: '/',
-        domain: isReplit ? `.${process.env.REPL_OWNER}.repl.co` : undefined
+        domain: isReplit ? '.repl.co' : undefined // Allow all Replit subdomains
       }
     });
 
@@ -255,9 +264,9 @@ sessionPool.on('connect', () => {
         console.log(`[Server] Running on Replit:`, isReplit);
         console.log(`[Server] Domain:`, domain);
         console.log(`[Server] Session configuration:`, {
-          secure: isProduction || isReplit,
-          sameSite: isProduction || isReplit ? 'none' : 'lax',
-          domain: isReplit ? `.${process.env.REPL_OWNER}.repl.co` : undefined
+          secure: true,
+          sameSite: 'none',
+          domain: isReplit ? '.repl.co' : undefined
         });
         resolve();
       }).on('error', reject);
