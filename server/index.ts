@@ -151,6 +151,12 @@ sessionPool.on('connect', () => {
       }
     });
 
+    // API middleware to ensure JSON responses
+    app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+      res.setHeader('Content-Type', 'application/json');
+      next();
+    });
+
     // Session and passport middleware
     app.use(sessionMiddleware);
     app.use(passport.initialize());
@@ -174,12 +180,19 @@ sessionPool.on('connect', () => {
     setupAuth(app);
     registerRoutes(app);
 
+    // API error handler to ensure JSON responses
+    app.use('/api', (err: Error, _req: Request, res: Response, next: NextFunction) => {
+      console.error('[API Error]', err);
+      res.status(500).json({
+        error: 'Internal Server Error',
+        message: process.env.NODE_ENV === 'development' ? err.message : 'An unexpected error occurred'
+      });
+    });
+
     // Health check endpoint with enhanced diagnostics
     app.get('/health', async (_req, res) => {
       try {
-        // Test database connection
         await sessionPool.query('SELECT NOW()');
-        
         res.json({ 
           status: 'ok', 
           timestamp: new Date().toISOString(),
@@ -199,25 +212,6 @@ sessionPool.on('connect', () => {
           details: error instanceof Error ? error.message : 'Unknown error'
         });
       }
-    });
-
-    // Enhanced error handling middleware
-    app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
-      console.error('[Server Error]', {
-        error: err.message,
-        stack: err.stack,
-        url: req.url,
-        method: req.method,
-        sessionID: req.sessionID,
-        authenticated: req.isAuthenticated(),
-        userID: req.user?.id,
-        timestamp: new Date().toISOString()
-      });
-
-      res.status(500).json({ 
-        error: 'Internal server error',
-        message: process.env.NODE_ENV === 'development' ? err.message : 'An unexpected error occurred'
-      });
     });
 
     if (!isProduction) {
