@@ -10,6 +10,8 @@
     "db:push": "drizzle-kit push:pg"
   },
   "dependencies": {
+    "@ffmpeg/ffmpeg": "^0.12.10",
+    "@ffmpeg/util": "^0.12.1",
     "@hookform/resolvers": "^3.9.1",
     "@neondatabase/serverless": "^0.10.3",
     "@radix-ui/react-accordion": "^1.2.1",
@@ -70,6 +72,7 @@
     "react-hook-form": "^7.53.2",
     "react-resizable-panels": "^2.1.4",
     "recharts": "^2.13.3",
+    "recordrtc": "^5.6.2",
     "swr": "^2.2.5",
     "tailwind-merge": "^2.5.4",
     "tailwindcss-animate": "^1.0.7",
