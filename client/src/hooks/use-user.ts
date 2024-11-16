@@ -133,6 +133,21 @@ export function useUser() {
     };
   }, []);
 
+  // Enhanced JSON parsing with error handling
+  const parseJSON = async (response: Response): Promise<any> => {
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      throw new Error('Invalid response format: Expected JSON');
+    }
+
+    try {
+      return await response.json();
+    } catch (error) {
+      console.error('[Auth] JSON parse error:', error);
+      throw new Error('Failed to parse JSON response');
+    }
+  };
+
   // Enhanced request handler with better error handling and timeout
   const handleAuthRequest = async (
     url: string,
@@ -162,26 +177,44 @@ export function useUser() {
       });
 
       clearTimeout(timeoutId);
-      const data = await response.json();
 
-      if (!response.ok) {
-        const errorCategory = categorizeError({ status: response.status });
-        console.error('[Auth] Request failed:', {
-          type: errorCategory,
+      try {
+        const data = await parseJSON(response);
+
+        if (!response.ok) {
+          const errorCategory = categorizeError({ status: response.status });
+          console.error('[Auth] Request failed:', {
+            type: errorCategory,
+            status: response.status,
+            url,
+            data,
+            timestamp: new Date().toISOString()
+          });
+
+          return { 
+            ok: false, 
+            message: data?.message || data?.error || `Request failed: ${response.statusText}`,
+            status: response.status,
+            type: errorCategory
+          };
+        }
+
+        return { ok: true, data };
+      } catch (parseError) {
+        console.error('[Auth] Response parsing error:', {
+          error: parseError,
           status: response.status,
           url,
           timestamp: new Date().toISOString()
         });
 
-        return { 
-          ok: false, 
-          message: data?.message || `Request failed: ${response.statusText}`,
+        return {
+          ok: false,
+          message: 'Invalid server response format',
           status: response.status,
-          type: errorCategory
+          type: 'SERVER'
         };
       }
-
-      return { ok: true, data };
     } catch (e) {
       clearTimeout(timeoutId);
       const isTimeout = e instanceof Error && e.name === 'AbortError';
@@ -281,12 +314,15 @@ export function useUser() {
       setLastError(null);
       setErrorType(null);
       
-      // Enhanced guest cleanup
+      // Enhanced guest cleanup with verification
       if (user?.isGuest && user?.guestId) {
         try {
           // Clear guest preferences first
           await mutatePreferences(undefined, false);
-          console.log('[Auth] Cleared guest preferences for:', user.guestId);
+          // Clean up any local storage data related to guest
+          localStorage.removeItem('guest_preferences');
+          localStorage.removeItem('guest_settings');
+          console.log('[Auth] Cleared guest data for:', user.guestId);
         } catch (prefError) {
           console.error('[Auth] Failed to clear guest preferences:', {
             error: prefError instanceof Error ? prefError.message : 'Unknown error',
@@ -313,8 +349,9 @@ export function useUser() {
         await mutate(undefined, { revalidate: true });
       }
       
-      // Clear all SWR cache
+      // Clear all SWR cache and session data
       await mutate(undefined, false);
+      sessionStorage.clear(); // Clear any session storage data
       
       return result;
     } catch (error) {

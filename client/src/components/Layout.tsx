@@ -10,15 +10,33 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Leaf, LogOut, User, Radio } from 'lucide-react';
+import { ErrorBoundary } from './ErrorBoundary';
+import { useState } from 'react';
+
+// Component for channel-related content
+const ChannelNav = () => {
+  return (
+    <Link href="/channels">
+      <Button variant="ghost" className="flex items-center space-x-2">
+        <Radio className="h-4 w-4" />
+        <span>Channels</span>
+      </Button>
+    </Link>
+  );
+};
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useUser();
   const { toast } = useToast();
   const [, setLocation] = useLocation();
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const isAuthPage = location === '/login' || location === '/register';
 
   const handleLogout = async () => {
+    if (isLoggingOut) return; // Prevent multiple logout attempts
+
     try {
+      setIsLoggingOut(true);
       console.log('[Auth] Initiating logout:', { 
         isGuest: user?.isGuest,
         username: user?.username 
@@ -58,7 +76,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
       
       // Force navigation on error
       window.location.replace('/login');
+    } finally {
+      setIsLoggingOut(false);
     }
+  };
+
+  const handleError = (error: Error) => {
+    console.error('[Layout] Error in channel components:', error);
+    toast({
+      title: "Error",
+      description: "Failed to load channel components. Please try refreshing the page.",
+      variant: "destructive",
+    });
   };
 
   return (
@@ -73,19 +102,20 @@ export function Layout({ children }: { children: React.ReactNode }) {
               </Button>
             </Link>
             <nav className="hidden md:flex items-center space-x-4">
-              <Link href="/channels">
-                <Button variant="ghost" className="flex items-center space-x-2">
-                  <Radio className="h-4 w-4" />
-                  <span>Channels</span>
-                </Button>
-              </Link>
+              <ErrorBoundary onError={handleError}>
+                <ChannelNav />
+              </ErrorBoundary>
             </nav>
           </div>
 
           {!isAuthPage && user ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="relative h-8 w-8 rounded-full">
+                <Button 
+                  variant="ghost" 
+                  className="relative h-8 w-8 rounded-full"
+                  disabled={isLoggingOut}
+                >
                   <Avatar className="h-8 w-8">
                     <AvatarImage src={`https://avatar.vercel.sh/${user.username}`} />
                     <AvatarFallback>{user.username[0].toUpperCase()}</AvatarFallback>
@@ -101,9 +131,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     </Button>
                   </Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleLogout}>
+                <DropdownMenuItem 
+                  onClick={handleLogout}
+                  disabled={isLoggingOut}
+                >
                   <LogOut className="mr-2 h-4 w-4" />
-                  Logout
+                  {isLoggingOut ? 'Logging out...' : 'Logout'}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -120,7 +153,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
-      <main>{children}</main>
+      <ErrorBoundary onError={handleError}>
+        <main>{children}</main>
+      </ErrorBoundary>
     </div>
   );
 }
