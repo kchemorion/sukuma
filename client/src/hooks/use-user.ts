@@ -159,14 +159,27 @@ export function useUser() {
     const timeoutId = setTimeout(() => controller.abort(), NETWORK_TIMEOUT);
 
     try {
+      // Enhanced headers with proper content type
       const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
         'Accept': 'application/json',
       };
+
+      // Only add Content-Type for requests with body
+      if (body || (method === 'POST' && url !== '/logout')) {
+        headers['Content-Type'] = 'application/json';
+      }
 
       if (guestId) {
         headers['X-Guest-ID'] = guestId;
       }
+
+      console.log('[Auth] Making request:', {
+        url,
+        method,
+        headers,
+        hasBody: !!body,
+        timestamp: new Date().toISOString()
+      });
 
       const response = await fetch(url, {
         method,
@@ -178,24 +191,41 @@ export function useUser() {
 
       clearTimeout(timeoutId);
 
+      // Enhanced response handling
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        console.error('[Auth] Invalid response content type:', {
+          url,
+          method,
+          contentType,
+          status: response.status,
+          timestamp: new Date().toISOString()
+        });
+        return {
+          ok: false,
+          message: 'Invalid response format: Expected JSON',
+          status: response.status,
+          type: 'SERVER'
+        };
+      }
+
       try {
-        const data = await parseJSON(response);
+        const data = await response.json();
 
         if (!response.ok) {
-          const errorCategory = categorizeError({ status: response.status });
           console.error('[Auth] Request failed:', {
-            type: errorCategory,
-            status: response.status,
             url,
-            data,
+            method,
+            status: response.status,
+            error: data?.error || data?.message,
             timestamp: new Date().toISOString()
           });
 
-          return { 
-            ok: false, 
+          return {
+            ok: false,
             message: data?.message || data?.error || `Request failed: ${response.statusText}`,
             status: response.status,
-            type: errorCategory
+            type: categorizeError({ status: response.status })
           };
         }
 
@@ -203,8 +233,9 @@ export function useUser() {
       } catch (parseError) {
         console.error('[Auth] Response parsing error:', {
           error: parseError,
-          status: response.status,
           url,
+          method,
+          status: response.status,
           timestamp: new Date().toISOString()
         });
 
@@ -221,14 +252,15 @@ export function useUser() {
       const errorCategory = categorizeError(e);
 
       console.error('[Auth] Network error:', {
-        type: errorCategory,
+        url,
+        method,
         error: e instanceof Error ? e.message : 'Unknown error',
         isTimeout,
         timestamp: new Date().toISOString()
       });
 
-      return { 
-        ok: false, 
+      return {
+        ok: false,
         message: isTimeout ? 'Request timed out' : (e instanceof Error ? e.message : 'Network error occurred'),
         status: isTimeout ? 408 : 0,
         type: errorCategory

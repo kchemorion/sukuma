@@ -103,9 +103,59 @@ sessionPool.on('connect', () => {
       next();
     });
 
+    // Enhanced middleware for content-type and empty request handling
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      // Skip content-type check for GET and HEAD requests
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        const contentType = req.headers['content-type'];
+        const contentLength = parseInt(req.headers['content-length'] || '0');
+
+        // Log request details for debugging
+        console.log('[API] Incoming request:', {
+          path: req.path,
+          method: req.method,
+          contentType,
+          contentLength,
+          timestamp: new Date().toISOString()
+        });
+
+        // Handle empty requests
+        if (contentLength === 0 && req.path !== '/logout') {
+          console.warn('[API] Empty request body:', {
+            path: req.path,
+            method: req.method,
+            timestamp: new Date().toISOString()
+          });
+          return res.status(400).json({
+            error: 'Empty Request',
+            message: 'Request body cannot be empty',
+            details: 'Please provide valid JSON data'
+          });
+        }
+
+        // Verify content-type for non-empty requests
+        if (contentLength > 0 && (!contentType || !contentType.includes('application/json'))) {
+          console.error('[API] Invalid Content-Type:', {
+            path: req.path,
+            method: req.method,
+            contentType,
+            timestamp: new Date().toISOString()
+          });
+          return res.status(415).json({
+            error: 'Unsupported Media Type',
+            message: 'Content-Type must be application/json',
+            details: 'Set Content-Type header to application/json'
+          });
+        }
+      }
+      next();
+    });
+
     app.use(express.json({
       limit: '10mb',
       verify: (req: Request, res: Response, buf: Buffer, encoding: string) => {
+        if (buf.length === 0) return; // Allow empty bodies for specific endpoints
+
         try {
           // Log incoming request details for debugging
           console.log('[API] Parsing JSON request:', {
@@ -116,8 +166,10 @@ sessionPool.on('connect', () => {
             timestamp: new Date().toISOString()
           });
 
+          // Try to parse the JSON body
           JSON.parse(buf.toString());
         } catch (e) {
+          // Enhanced error logging
           console.error('[API] JSON parse error:', {
             path: req.path,
             method: req.method,
@@ -126,10 +178,14 @@ sessionPool.on('connect', () => {
             timestamp: new Date().toISOString()
           });
 
+          // Improved error response
           res.status(400).json({
             error: 'Invalid JSON',
             message: e instanceof Error ? e.message : 'Failed to parse request body',
-            details: 'Request body must be valid JSON'
+            details: 'Request body must be valid JSON',
+            path: req.path,
+            method: req.method,
+            timestamp: new Date().toISOString()
           });
           throw new Error('Invalid JSON');
         }
