@@ -209,6 +209,8 @@ export function setupAuth(app: Express) {
         sessionID: req.sessionID 
       });
       
+      // Update to send the correct headers to the client
+      res.setHeader('Content-Type', 'application/json');
       res.json({
         message: "Guest login successful",
         user: guestUser,
