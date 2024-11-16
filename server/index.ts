@@ -119,7 +119,14 @@ sessionPool.on('connect', () => {
           timestamp: new Date().toISOString()
         });
 
-        // Handle empty requests
+        // Special handling for guest-login endpoint
+        if (req.path === '/guest-login') {
+          // Allow empty body for guest login
+          next();
+          return;
+        }
+
+        // Handle empty requests for other endpoints
         if (contentLength === 0 && req.path !== '/logout') {
           console.warn('[API] Empty request body:', {
             path: req.path,
@@ -154,7 +161,10 @@ sessionPool.on('connect', () => {
     app.use(express.json({
       limit: '10mb',
       verify: (req: Request, res: Response, buf: Buffer, encoding: string) => {
-        if (buf.length === 0) return; // Allow empty bodies for specific endpoints
+        // Skip JSON parsing for guest-login endpoint with empty body
+        if (req.path === '/guest-login' && buf.length === 0) {
+          return;
+        }
 
         try {
           // Log incoming request details for debugging

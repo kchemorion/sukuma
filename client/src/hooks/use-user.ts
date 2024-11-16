@@ -152,7 +152,7 @@ export function useUser() {
   const handleAuthRequest = async (
     url: string,
     method: string,
-    body?: InsertUser,
+    body?: InsertUser | null,
     guestId?: string | null
   ): Promise<RequestResult> => {
     const controller = new AbortController();
@@ -165,7 +165,7 @@ export function useUser() {
       };
 
       // Only add Content-Type for requests with body
-      if (body || (method === 'POST' && url !== '/logout')) {
+      if (body || (method === 'POST' && url !== '/logout' && url !== '/guest-login')) {
         headers['Content-Type'] = 'application/json';
       }
 
