@@ -25,13 +25,19 @@ export function Layout({ children }: { children: React.ReactNode }) {
           title: "Success",
           description: "Logged out successfully",
         });
-        window.location.href = '/login'; // Use direct navigation
+        
+        // Use window.location.replace for clean navigation
+        window.location.replace('/login');
       } else {
+        console.error('[Auth] Logout failed:', result.message);
         toast({
           title: "Error",
           description: result.message || "Failed to logout",
           variant: "destructive",
         });
+        
+        // Force navigation on error
+        window.location.replace('/login');
       }
     } catch (error) {
       console.error('[Auth] Logout error:', error);
@@ -40,6 +46,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
         description: "An unexpected error occurred during logout",
         variant: "destructive",
       });
+      
+      // Force navigation on error
+      window.location.replace('/login');
     }
   };
 

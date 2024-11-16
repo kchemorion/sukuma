@@ -346,44 +346,78 @@ export function setupAuth(app: Express) {
     })(req, res, next);
   });
 
-  app.post("/logout", (req, res) => {
+  app.post("/logout", async (req, res) => {
     const sessionID = req.sessionID;
+    const isGuest = !!req.session.guestUser;
+    const guestId = req.session.guestUser?.guestId;
+    
     console.log('[Auth] Logout initiated:', { 
       userId: req.user?.id || req.session.guestUser?.username,
-      sessionID 
+      sessionID,
+      isGuest,
+      guestId 
     });
 
-    // Handle guest session cleanup
-    if (req.session.guestUser) {
-      delete req.session.guestUser;
-    }
-
-    // Handle regular session cleanup
-    req.logout((err) => {
-      if (err) {
-        console.error('[Auth] Logout error:', err);
-        return res.status(500).json({ message: "Logout failed" });
-      }
-      
-      req.session.destroy((err) => {
-        if (err) {
-          console.error('[Auth] Session destruction error:', err);
-          return res.status(500).json({ message: "Error clearing session" });
+    try {
+      // Handle guest session cleanup
+      if (isGuest && guestId) {
+        try {
+          // Clean up guest preferences
+          await db.delete(guest_preferences)
+            .where(eq(guest_preferences.guest_id, guestId))
+            .where(eq(guest_preferences.session_id, sessionID));
+          
+          console.log('[Auth] Cleaned up guest preferences:', { guestId, sessionID });
+        } catch (error) {
+          console.error('[Auth] Error cleaning guest preferences:', error);
+          // Continue with logout even if preference cleanup fails
         }
+        delete req.session.guestUser;
+      }
 
-        console.log('[Auth] Logout successful:', { sessionID });
-        res.clearCookie('sukuma.sid', {
-          path: '/',
-          httpOnly: true,
-          secure: process.env.NODE_ENV === "production",
-          sameSite: process.env.NODE_ENV === "production" ? 'none' : 'lax'
+      // Handle regular session cleanup
+      if (req.isAuthenticated()) {
+        await new Promise<void>((resolve, reject) => {
+          req.logout((err) => {
+            if (err) reject(err);
+            else resolve();
+          });
         });
-        res.json({ 
-          message: "Logout successful",
-          success: true
+      }
+
+      // Destroy session with proper error handling
+      await new Promise<void>((resolve, reject) => {
+        req.session.destroy((err) => {
+          if (err) reject(err);
+          else resolve();
         });
       });
-    });
+
+      console.log('[Auth] Logout successful:', { 
+        sessionID,
+        isGuest,
+        guestId
+      });
+
+      res.clearCookie('sukuma.sid', {
+        path: '/',
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? 'none' : 'lax'
+      });
+      
+      res.json({ 
+        message: "Logout successful",
+        success: true,
+        wasGuest: isGuest
+      });
+    } catch (error) {
+      console.error('[Auth] Logout error:', error);
+      res.status(500).json({ 
+        message: "Logout failed", 
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
   });
 
   app.get("/api/user", async (req, res) => {

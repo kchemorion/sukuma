@@ -348,15 +348,25 @@ export function useUser() {
       localStorage.removeItem(GUEST_ID_KEY);
       setLastError(null);
       setErrorType(null);
+      
+      // Clear preferences before logout
+      if (user?.isGuest) {
+        await mutatePreferences(undefined, false);
+      }
+
+      // Clear user data first to prevent flickering
       await mutate(undefined, { revalidate: false });
-      await mutatePreferences(undefined, false);
       
       const result = await handleAuthRequest("/logout", "POST");
       
       if (!result.ok) {
-        console.warn('[Auth] Logout failed, forcing client-side logout');
+        console.warn('[Auth] Logout failed, forcing client-side cleanup');
+        // Force cleanup even if server request fails
         await mutate(undefined, { revalidate: true });
       }
+      
+      // Ensure all SWR cache is cleared
+      mutate(() => true, undefined, { revalidate: false });
       
       return result;
     } catch (error) {
@@ -366,7 +376,11 @@ export function useUser() {
         error: error instanceof Error ? error.message : 'Unknown error',
         timestamp: new Date().toISOString()
       });
+      
+      // Force state cleanup on error
       await mutate(undefined, { revalidate: true });
+      mutate(() => true, undefined, { revalidate: false });
+      
       return {
         ok: false,
         message: error instanceof Error ? error.message : 'Logout failed',
