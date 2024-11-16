@@ -83,18 +83,58 @@ sessionPool.on('connect', () => {
     app.set('trust proxy', isReplit || isProduction ? 1 : 0);
 
     // Basic middleware with enhanced error handling
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      const contentType = req.headers['content-type'];
+      
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        if (!contentType || !contentType.includes('application/json')) {
+          console.error('[API] Invalid Content-Type:', {
+            path: req.path,
+            method: req.method,
+            contentType,
+            timestamp: new Date().toISOString()
+          });
+          return res.status(415).json({
+            error: 'Unsupported Media Type',
+            message: 'Content-Type must be application/json'
+          });
+        }
+      }
+      next();
+    });
+
     app.use(express.json({
       limit: '10mb',
-      verify: (req, res, buf) => {
+      verify: (req: Request, res: Response, buf: Buffer, encoding: string) => {
         try {
+          // Log incoming request details for debugging
+          console.log('[API] Parsing JSON request:', {
+            path: req.path,
+            method: req.method,
+            contentLength: buf.length,
+            encoding,
+            timestamp: new Date().toISOString()
+          });
+
           JSON.parse(buf.toString());
         } catch (e) {
-          res.status(400).json({ error: 'Invalid JSON' });
+          console.error('[API] JSON parse error:', {
+            path: req.path,
+            method: req.method,
+            error: e instanceof Error ? e.message : 'Unknown error',
+            body: buf.toString().substring(0, 100), // Log first 100 chars for debugging
+            timestamp: new Date().toISOString()
+          });
+
+          res.status(400).json({
+            error: 'Invalid JSON',
+            message: e instanceof Error ? e.message : 'Failed to parse request body',
+            details: 'Request body must be valid JSON'
+          });
           throw new Error('Invalid JSON');
         }
       }
     }));
-    app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
     // Simplified and more secure CORS configuration
     const corsOptions = {
