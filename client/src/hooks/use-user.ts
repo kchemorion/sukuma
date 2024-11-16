@@ -345,13 +345,20 @@ export function useUser() {
 
   const logout = async () => {
     try {
+      // Clear guest ID from localStorage first
       localStorage.removeItem(GUEST_ID_KEY);
       setLastError(null);
       setErrorType(null);
       
-      // Clear preferences before logout
-      if (user?.isGuest) {
-        await mutatePreferences(undefined, false);
+      // Clear guest preferences if user is a guest
+      if (user?.isGuest && user?.guestId) {
+        try {
+          console.log('[Auth] Clearing guest preferences before logout');
+          await mutatePreferences(undefined, false);
+        } catch (prefError) {
+          console.error('[Auth] Failed to clear guest preferences:', prefError);
+          // Continue with logout even if preference clearing fails
+        }
       }
 
       // Clear user data first to prevent flickering
@@ -360,13 +367,13 @@ export function useUser() {
       const result = await handleAuthRequest("/logout", "POST");
       
       if (!result.ok) {
-        console.warn('[Auth] Logout failed, forcing client-side cleanup');
+        console.warn('[Auth] Logout failed:', result.message);
         // Force cleanup even if server request fails
         await mutate(undefined, { revalidate: true });
       }
       
-      // Ensure all SWR cache is cleared
-      mutate(() => true, undefined, { revalidate: false });
+      // Clear all SWR cache
+      await mutate(() => true, undefined, { revalidate: false });
       
       return result;
     } catch (error) {
@@ -379,7 +386,7 @@ export function useUser() {
       
       // Force state cleanup on error
       await mutate(undefined, { revalidate: true });
-      mutate(() => true, undefined, { revalidate: false });
+      await mutate(() => true, undefined, { revalidate: false });
       
       return {
         ok: false,

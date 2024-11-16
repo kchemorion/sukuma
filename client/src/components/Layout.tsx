@@ -14,22 +14,31 @@ import { Leaf, LogOut, User, Radio } from 'lucide-react';
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useUser();
   const { toast } = useToast();
-  const [location] = useLocation();
+  const [, setLocation] = useLocation();
   const isAuthPage = location === '/login' || location === '/register';
 
   const handleLogout = async () => {
     try {
+      console.log('[Auth] Initiating logout:', { 
+        isGuest: user?.isGuest,
+        username: user?.username 
+      });
+
       const result = await logout();
+      
       if (result.ok) {
+        // Show appropriate message based on user type
         toast({
           title: "Success",
-          description: "Logged out successfully",
+          description: user?.isGuest 
+            ? "Guest session ended successfully" 
+            : "Logged out successfully"
         });
         
-        // Use window.location.replace for clean navigation
+        // Use clean navigation to login page
         window.location.replace('/login');
       } else {
-        console.error('[Auth] Logout failed:', result.message);
+        console.error('[Auth] Logout failed:', result);
         toast({
           title: "Error",
           description: result.message || "Failed to logout",

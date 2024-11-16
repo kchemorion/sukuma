@@ -362,16 +362,28 @@ export function setupAuth(app: Express) {
       // Handle guest session cleanup
       if (isGuest && guestId) {
         try {
-          // Clean up guest preferences
-          await db.delete(guest_preferences)
+          // Verify guest preferences exist before cleanup
+          const [existingPrefs] = await db
+            .select()
+            .from(guest_preferences)
             .where(eq(guest_preferences.guest_id, guestId))
-            .where(eq(guest_preferences.session_id, sessionID));
-          
-          console.log('[Auth] Cleaned up guest preferences:', { guestId, sessionID });
+            .where(eq(guest_preferences.session_id, sessionID))
+            .limit(1);
+
+          if (existingPrefs) {
+            // Clean up guest preferences
+            await db.delete(guest_preferences)
+              .where(eq(guest_preferences.guest_id, guestId))
+              .where(eq(guest_preferences.session_id, sessionID));
+            
+            console.log('[Auth] Cleaned up guest preferences:', { guestId, sessionID });
+          }
         } catch (error) {
           console.error('[Auth] Error cleaning guest preferences:', error);
           // Continue with logout even if preference cleanup fails
         }
+
+        // Clear guest user from session
         delete req.session.guestUser;
       }
 
@@ -393,17 +405,25 @@ export function setupAuth(app: Express) {
         });
       });
 
+      // Get domain settings from server configuration
+      const domain = req.hostname.includes('localhost') ? undefined : 
+                    req.hostname.includes('.repl.co') ? '.repl.co' : 
+                    req.hostname;
+
       console.log('[Auth] Logout successful:', { 
         sessionID,
         isGuest,
-        guestId
+        guestId,
+        domain
       });
 
+      // Clear session cookie with proper domain settings
       res.clearCookie('sukuma.sid', {
         path: '/',
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
-        sameSite: process.env.NODE_ENV === "production" ? 'none' : 'lax'
+        sameSite: process.env.NODE_ENV === "production" ? 'none' : 'lax',
+        domain
       });
       
       res.json({ 
