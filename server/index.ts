@@ -41,7 +41,7 @@ const getDomain = () => {
   if (isProduction && process.env.APP_DOMAIN) {
     return process.env.APP_DOMAIN;
   }
-  return 'localhost:5000';
+  return 'localhost:3000';
 };
 
 const domain = getDomain();
@@ -84,117 +84,34 @@ sessionPool.on('connect', () => {
 
     // Basic middleware with enhanced error handling
     app.use((req: Request, res: Response, next: NextFunction) => {
-      const contentType = req.headers['content-type'];
-      
-      if (req.method !== 'GET' && req.method !== 'HEAD') {
-        if (!contentType || !contentType.includes('application/json')) {
-          console.error('[API] Invalid Content-Type:', {
-            path: req.path,
-            method: req.method,
-            contentType,
-            timestamp: new Date().toISOString()
-          });
-          return res.status(415).json({
-            error: 'Unsupported Media Type',
-            message: 'Content-Type must be application/json'
-          });
-        }
+      // Set default content type for API routes
+      if (req.path.startsWith('/api/') || req.path === '/login' || req.path === '/logout' || req.path === '/register') {
+        res.type('application/json');
       }
       next();
     });
 
-    // Enhanced middleware for content-type and empty request handling
-    app.use((req: Request, res: Response, next: NextFunction) => {
-      // Skip content-type check for GET and HEAD requests
-      if (req.method !== 'GET' && req.method !== 'HEAD') {
-        const contentType = req.headers['content-type'];
-        const contentLength = parseInt(req.headers['content-length'] || '0');
-
-        // Log request details for debugging
-        console.log('[API] Incoming request:', {
-          path: req.path,
-          method: req.method,
-          contentType,
-          contentLength,
-          timestamp: new Date().toISOString()
-        });
-
-        // Special handling for guest-login endpoint
-        if (req.path === '/guest-login') {
-          // Allow empty body for guest login
-          next();
-          return;
-        }
-
-        // Handle empty requests for other endpoints
-        if (contentLength === 0 && req.path !== '/logout') {
-          console.warn('[API] Empty request body:', {
-            path: req.path,
-            method: req.method,
-            timestamp: new Date().toISOString()
-          });
-          return res.status(400).json({
-            error: 'Empty Request',
-            message: 'Request body cannot be empty',
-            details: 'Please provide valid JSON data'
-          });
-        }
-
-        // Verify content-type for non-empty requests
-        if (contentLength > 0 && (!contentType || !contentType.includes('application/json'))) {
-          console.error('[API] Invalid Content-Type:', {
-            path: req.path,
-            method: req.method,
-            contentType,
-            timestamp: new Date().toISOString()
-          });
-          return res.status(415).json({
-            error: 'Unsupported Media Type',
-            message: 'Content-Type must be application/json',
-            details: 'Set Content-Type header to application/json'
-          });
-        }
-      }
-      next();
-    });
-
+    // Enhanced JSON middleware with better error handling
     app.use(express.json({
       limit: '10mb',
-      verify: (req: Request, res: Response, buf: Buffer, encoding: string) => {
-        // Skip JSON parsing for guest-login endpoint with empty body
-        if (req.path === '/guest-login' && buf.length === 0) {
+      verify: (req: Request, res: Response, buf: Buffer) => {
+        if (req.path === '/guest-login' || req.path === '/logout' || buf.length === 0) {
           return;
         }
 
         try {
-          // Log incoming request details for debugging
-          console.log('[API] Parsing JSON request:', {
-            path: req.path,
-            method: req.method,
-            contentLength: buf.length,
-            encoding,
-            timestamp: new Date().toISOString()
-          });
-
-          // Try to parse the JSON body
           JSON.parse(buf.toString());
         } catch (e) {
-          // Enhanced error logging
           console.error('[API] JSON parse error:', {
             path: req.path,
             method: req.method,
             error: e instanceof Error ? e.message : 'Unknown error',
-            body: buf.toString().substring(0, 100), // Log first 100 chars for debugging
             timestamp: new Date().toISOString()
           });
 
-          // Improved error response
           res.status(400).json({
             error: 'Invalid JSON',
             message: e instanceof Error ? e.message : 'Failed to parse request body',
-            details: 'Request body must be valid JSON',
-            path: req.path,
-            method: req.method,
             timestamp: new Date().toISOString()
           });
           throw new Error('Invalid JSON');
@@ -213,11 +130,9 @@ sessionPool.on('connect', () => {
         const allowedDomains = [
           domain,
           'localhost',
-          'localhost:5000',
           'localhost:3000'
         ];
 
-        // Add Replit-specific domains
         if (isReplit) {
           allowedDomains.push(
             '.repl.co',
@@ -260,7 +175,7 @@ sessionPool.on('connect', () => {
 
     app.use(cors(corsOptions));
 
-    // Create session table if it doesn't exist
+    // Create session table with proper indices
     try {
       await sessionPool.query(`
         CREATE TABLE IF NOT EXISTS "session" (
@@ -271,8 +186,12 @@ sessionPool.on('connect', () => {
         );
         CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
       `);
+      
+      // Clean up expired sessions
+      await sessionPool.query('DELETE FROM "session" WHERE expire < NOW()');
+      console.log('[Database] Session table initialized and cleaned up');
     } catch (error) {
-      console.error('[Database] Error creating session table:', error);
+      console.error('[Database] Error initializing session table:', error);
       throw error;
     }
 
@@ -294,7 +213,7 @@ sessionPool.on('connect', () => {
 
     // Improved cookie settings for cross-origin access
     const cookieSettings = {
-      secure: isProduction || isReplit,
+      secure: isProduction || isReplit ? true : false,
       httpOnly: true,
       sameSite: (isProduction || isReplit) ? 'none' as const : 'lax' as const,
       maxAge: 24 * 60 * 60 * 1000, // 24 hours
@@ -310,14 +229,8 @@ sessionPool.on('connect', () => {
       resave: false,
       saveUninitialized: false,
       rolling: true,
-      proxy: isProduction || isReplit,
+      proxy: isProduction || isReplit ? true : false,
       cookie: cookieSettings
-    });
-
-    // API middleware
-    app.use('/api', (req: Request, res: Response, next: NextFunction) => {
-      res.setHeader('Content-Type', 'application/json');
-      next();
     });
 
     // Session and passport middleware
@@ -325,67 +238,19 @@ sessionPool.on('connect', () => {
     app.use(passport.initialize());
     app.use(passport.session());
 
-    // Enhanced session monitoring middleware
-    app.use((req: Request, res: Response, next: NextFunction) => {
-      if (!req.session) {
-        console.error('[Session] No session found for request:', {
-          path: req.path,
-          method: req.method,
-          ip: req.ip,
-          headers: req.headers
-        });
-        return res.status(500).json({
-          error: 'Session Error',
-          message: 'Unable to establish session'
-        });
-      }
-      next();
-    });
-
     // Initialize routes
     setupAuth(app);
     registerRoutes(app);
 
-    // Enhanced API error handler
+    // Enhanced error handlers
     app.use('/api', (err: Error, _req: Request, res: Response, _next: NextFunction) => {
       console.error('[API Error]', err);
       const statusCode = err.message.includes('Not allowed by CORS') ? 403 : 500;
       res.status(statusCode).json({
         error: statusCode === 403 ? 'Forbidden' : 'Internal Server Error',
-        message: process.env.NODE_ENV === 'development' ? err.message : 'An unexpected error occurred'
+        message: process.env.NODE_ENV === 'development' ? err.message : 'An unexpected error occurred',
+        timestamp: new Date().toISOString()
       });
-    });
-
-    // Health check endpoint
-    app.get('/health', async (_req, res) => {
-      try {
-        const startTime = Date.now();
-        await sessionPool.query('SELECT NOW()');
-        const duration = Date.now() - startTime;
-        
-        res.json({ 
-          status: 'ok', 
-          timestamp: new Date().toISOString(),
-          environment: process.env.NODE_ENV || 'development',
-          isReplit,
-          domain,
-          responseTime: duration,
-          database: {
-            connected: true,
-            totalConnections: sessionPool.totalCount,
-            idleConnections: sessionPool.idleCount,
-            waitingCount: sessionPool.waitingCount
-          }
-        });
-      } catch (error) {
-        console.error('[Health Check] Database error:', error);
-        res.status(503).json({
-          status: 'error',
-          timestamp: new Date().toISOString(),
-          error: 'Database connection failed',
-          details: error instanceof Error ? error.message : 'Unknown error'
-        });
-      }
     });
 
     if (!isProduction) {
@@ -396,8 +261,8 @@ sessionPool.on('connect', () => {
       console.log('[Static] Production assets configured');
     }
 
-    const PORT = Number(process.env.PORT) || 5000;
-    
+    const PORT = Number(process.env.PORT) || 3000;
+
     // Enhanced server error handling
     server.on('error', (error: NodeJS.ErrnoException) => {
       console.error('[Server] Failed to start:', error);
@@ -409,7 +274,7 @@ sessionPool.on('connect', () => {
 
     // Listen with proper error handling
     await new Promise<void>((resolve, reject) => {
-      const serverInstance = server.listen(PORT, "0.0.0.0", () => {
+      server.listen(PORT, "0.0.0.0", () => {
         console.log(`[Server] Running at http://0.0.0.0:${PORT}`);
         console.log(`[Server] Environment: ${process.env.NODE_ENV || 'development'}`);
         console.log(`[Server] Running on Replit:`, isReplit);
@@ -417,10 +282,6 @@ sessionPool.on('connect', () => {
         console.log(`[Server] Cookie settings:`, cookieSettings);
         resolve();
       }).on('error', reject);
-
-      // Set keep-alive timeout
-      serverInstance.keepAliveTimeout = 65000;
-      serverInstance.headersTimeout = 66000;
     });
 
   } catch (error) {
@@ -437,7 +298,6 @@ process.on('uncaughtException', (error) => {
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[Server] Unhandled Rejection at:', promise, 'reason:', reason);
-  process.exit(1);
 });
 
 // Handle graceful shutdown

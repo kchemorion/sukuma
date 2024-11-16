@@ -29,15 +29,6 @@ const crypto = {
 declare global {
   namespace Express {
     interface User extends SelectUser {}
-    interface Session {
-      guestUser?: {
-        id: number;
-        username: string;
-        points: number;
-        isGuest: boolean;
-        guestId: string;
-      };
-    }
   }
 }
 
@@ -104,7 +95,9 @@ export function setupAuth(app: Express) {
     }
   });
 
+  // Guest login with enhanced error handling
   app.post("/guest-login", async (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
     console.log('[Auth] Guest login initiated');
     
     try {
@@ -112,53 +105,29 @@ export function setupAuth(app: Express) {
       let guestUsername: string;
       let guestId: string;
       
-      // Improved guest session validation
       if (existingGuestId && typeof existingGuestId === 'string') {
-        // Check for existing guest preferences using guest ID
         const [existingPrefs] = await db
           .select()
           .from(guest_preferences)
           .where(eq(guest_preferences.guest_id, existingGuestId))
           .limit(1);
 
-        if (existingPrefs && existingPrefs.session_id) {
-          // Validate session is still active
-          if (existingPrefs.session_id === req.sessionID) {
-            guestUsername = existingPrefs.guest_username;
-            guestId = existingGuestId;
-            console.log('[Auth] Found existing guest preferences:', { 
-              guestId,
-              username: guestUsername
-            });
-          } else {
-            // Session mismatch - create new guest session
-            guestId = Math.random().toString(36).substring(2, 15);
-            guestUsername = `Guest_${guestId}`;
-            console.log('[Auth] Session expired, creating new guest:', {
-              guestId,
-              username: guestUsername
-            });
-          }
+        if (existingPrefs?.session_id === req.sessionID) {
+          guestUsername = existingPrefs.guest_username;
+          guestId = existingGuestId;
+          console.log('[Auth] Reusing existing guest session:', { guestId, username: guestUsername });
         } else {
-          // Generate new guest ID and username if existing ID not found
           guestId = Math.random().toString(36).substring(2, 15);
           guestUsername = `Guest_${guestId}`;
-          console.log('[Auth] Existing guest ID not found, creating new:', {
-            guestId,
-            username: guestUsername
-          });
+          console.log('[Auth] Creating new guest session:', { guestId, username: guestUsername });
         }
       } else {
-        // Generate new guest ID and username
         guestId = Math.random().toString(36).substring(2, 15);
         guestUsername = `Guest_${guestId}`;
-        console.log('[Auth] Creating new guest account:', {
-          guestId,
-          username: guestUsername
-        });
+        console.log('[Auth] Creating new guest session:', { guestId, username: guestUsername });
       }
 
-      // Create or update guest preferences with improved error handling
+      // Update or create guest preferences with proper error handling
       try {
         await db.insert(guest_preferences)
           .values({
@@ -176,8 +145,8 @@ export function setupAuth(app: Express) {
             }
           });
       } catch (dbError) {
-        console.error('[Auth] Database error creating guest preferences:', dbError);
-        throw new Error('Failed to create guest preferences');
+        console.error('[Auth] Database error during guest preferences update:', dbError);
+        throw new Error('Failed to create guest session');
       }
 
       const guestUser = {
@@ -188,29 +157,35 @@ export function setupAuth(app: Express) {
         guestId
       };
 
-      // Set up guest session with proper error handling
-      req.session.guestUser = guestUser;
-      
-      try {
-        await new Promise<void>((resolve, reject) => {
-          req.session.save((err) => {
-            if (err) reject(err);
-            else resolve();
-          });
-        });
-      } catch (sessionError) {
-        console.error('[Auth] Session save error:', sessionError);
-        throw new Error('Failed to save guest session');
+      if (!req.session) {
+        throw new Error('Session not initialized');
       }
+
+      req.session.guestUser = guestUser;
+      req.session.lastActivity = Date.now();
+
+      // Save session with proper error handling
+      await new Promise<void>((resolve, reject) => {
+        if (!req.session) {
+          reject(new Error('Session not initialized'));
+          return;
+        }
+        req.session.save((err) => {
+          if (err) {
+            console.error('[Auth] Session save error:', err);
+            reject(err);
+          } else {
+            resolve();
+          }
+        });
+      });
 
       console.log('[Auth] Guest login successful:', { 
         guestId,
         username: guestUsername,
         sessionID: req.sessionID 
       });
-      
-      // Update to send the correct headers to the client
-      res.setHeader('Content-Type', 'application/json');
+
       res.json({
         message: "Guest login successful",
         user: guestUser,
@@ -220,12 +195,130 @@ export function setupAuth(app: Express) {
       console.error('[Auth] Guest login error:', error);
       res.status(500).json({ 
         error: "Failed to create guest session",
-        details: error instanceof Error ? error.message : 'Unknown error'
+        details: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
       });
     }
   });
 
+  // Enhanced logout with proper cleanup
+  app.post("/logout", async (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    
+    if (!req.session) {
+      console.warn('[Auth] No session found during logout');
+      return res.status(400).json({ 
+        error: "No session found",
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const sessionID = req.sessionID;
+    const isGuest = !!req.session.guestUser;
+    const guestId = req.session.guestUser?.guestId;
+    
+    console.log('[Auth] Logout initiated:', { 
+      sessionID,
+      isGuest,
+      guestId,
+      timestamp: new Date().toISOString()
+    });
+
+    try {
+      // Step 1: Handle guest cleanup if needed
+      if (isGuest && guestId) {
+        try {
+          // Delete guest preferences
+          await db.delete(guest_preferences)
+            .where(eq(guest_preferences.guest_id, guestId));
+          
+          console.log('[Auth] Cleaned up guest preferences:', { 
+            guestId, 
+            sessionID,
+            timestamp: new Date().toISOString()
+          });
+        } catch (error) {
+          console.error('[Auth] Error cleaning guest preferences:', error);
+          // Continue with logout even if guest cleanup fails
+        }
+      }
+
+      // Step 2: Handle passport logout if authenticated
+      if (req.isAuthenticated()) {
+        await new Promise<void>((resolve, reject) => {
+          req.logout((err) => {
+            if (err) {
+              console.error('[Auth] Passport logout error:', err);
+              reject(err);
+            } else {
+              resolve();
+            }
+          });
+        });
+      }
+
+      // Step 3: Clear session data
+      await new Promise<void>((resolve, reject) => {
+        req.session.destroy((err) => {
+          if (err) {
+            console.error('[Auth] Session destruction error:', err);
+            reject(err);
+          } else {
+            resolve();
+          }
+        });
+      });
+
+      // Step 4: Clear session cookie
+      const domain = req.hostname.includes('localhost') ? undefined : 
+                    req.hostname.includes('.repl.co') ? '.repl.co' : 
+                    req.hostname;
+
+      res.clearCookie('sukuma.sid', {
+        path: '/',
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production" || !!process.env.REPL_ID,
+        sameSite: (process.env.NODE_ENV === "production" || !!process.env.REPL_ID) ? 'none' : 'lax',
+        domain
+      });
+
+      console.log('[Auth] Logout successful:', {
+        sessionID,
+        isGuest,
+        guestId,
+        timestamp: new Date().toISOString()
+      });
+
+      res.json({ 
+        message: "Logout successful",
+        success: true,
+        wasGuest: isGuest,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('[Auth] Logout error:', error);
+      
+      // Force cleanup on error
+      try {
+        if (req.session) {
+          req.session.destroy(() => {});
+        }
+      } catch (cleanupError) {
+        console.error('[Auth] Force cleanup error:', cleanupError);
+      }
+
+      res.status(500).json({ 
+        error: "Logout failed",
+        details: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
+      });
+    }
+  });
+
+  // Registration with enhanced validation
   app.post("/register", async (req, res, next) => {
+    res.setHeader('Content-Type', 'application/json');
+    
     try {
       console.log('[Auth] Registration attempt:', { username: req.body.username });
       
@@ -292,7 +385,9 @@ export function setupAuth(app: Express) {
     }
   });
 
+  // Login with enhanced error handling
   app.post("/login", (req, res, next) => {
+    res.setHeader('Content-Type', 'application/json');
     console.log('[Auth] Login attempt:', { username: req.body.username });
     
     if (!req.body.username || !req.body.password) {
@@ -348,131 +443,9 @@ export function setupAuth(app: Express) {
     })(req, res, next);
   });
 
-  app.post("/logout", async (req, res) => {
-    const sessionID = req.sessionID;
-    const isGuest = !!req.session.guestUser;
-    const guestId = req.session.guestUser?.guestId;
-    
-    console.log('[Auth] Logout initiated:', { 
-      userId: req.user?.id || req.session.guestUser?.username,
-      sessionID,
-      isGuest,
-      guestId 
-    });
-
-    try {
-      // Enhanced guest session cleanup
-      if (isGuest && guestId) {
-        try {
-          // First, find and verify the guest preferences
-          const [existingPrefs] = await db
-            .select()
-            .from(guest_preferences)
-            .where(eq(guest_preferences.guest_id, guestId))
-            .where(eq(guest_preferences.session_id, sessionID))
-            .limit(1);
-
-          if (existingPrefs) {
-            // Delete guest preferences with verified session
-            await db.delete(guest_preferences)
-              .where(eq(guest_preferences.guest_id, guestId))
-              .where(eq(guest_preferences.session_id, sessionID));
-          
-            console.log('[Auth] Cleaned up guest preferences:', { 
-              guestId, 
-              sessionID,
-              timestamp: new Date().toISOString()
-            });
-          }
-        } catch (error) {
-          console.error('[Auth] Error cleaning guest preferences:', {
-            error: error instanceof Error ? error.message : 'Unknown error',
-            guestId,
-            sessionID,
-            timestamp: new Date().toISOString()
-          });
-        }
-
-        // Clear guest user from session
-        delete req.session.guestUser;
-      }
-
-      // Handle regular session cleanup
-      if (req.isAuthenticated()) {
-        await new Promise<void>((resolve, reject) => {
-          req.logout((err) => {
-            if (err) {
-              console.error('[Auth] Logout error:', err);
-              reject(err);
-            } else {
-              resolve();
-            }
-          });
-        });
-      }
-
-      // Destroy session with enhanced error handling
-      await new Promise<void>((resolve, reject) => {
-        req.session.destroy((err) => {
-          if (err) {
-            console.error('[Auth] Session destruction error:', {
-              error: err instanceof Error ? err.message : 'Unknown error',
-              sessionID,
-              timestamp: new Date().toISOString()
-            });
-            reject(err);
-          } else {
-            resolve();
-          }
-        });
-      });
-
-      // Enhanced cookie cleanup with proper domain settings
-      const domain = req.hostname.includes('localhost') ? undefined : 
-                    req.hostname.includes('.repl.co') ? '.repl.co' : 
-                    req.hostname;
-
-      console.log('[Auth] Logout successful:', { 
-        sessionID,
-        isGuest,
-        guestId,
-        domain,
-        timestamp: new Date().toISOString()
-      });
-
-      // Clear session cookie with proper settings
-      res.clearCookie('sukuma.sid', {
-        path: '/',
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: process.env.NODE_ENV === "production" ? 'none' : 'lax',
-        domain
-      });
-    
-      res.json({ 
-        message: "Logout successful",
-        success: true,
-        wasGuest: isGuest,
-        timestamp: new Date().toISOString()
-      });
-    } catch (error) {
-      console.error('[Auth] Logout error:', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        sessionID,
-        isGuest,
-        guestId,
-        timestamp: new Date().toISOString()
-      });
-
-      res.status(500).json({ 
-        message: "Logout failed", 
-        error: error instanceof Error ? error.message : 'Unknown error',
-        timestamp: new Date().toISOString()
-      });
-    }
-  });
-
+  // User info endpoint with enhanced session handling
   app.get("/api/user", async (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
     console.log('[Auth] User info request:', { 
       authenticated: req.isAuthenticated(),
       sessionID: req.sessionID,
@@ -480,25 +453,28 @@ export function setupAuth(app: Express) {
     });
 
     try {
+      if (!req.session) {
+        throw new Error('Session not initialized');
+      }
+
       // Check for guest session first
       if (req.session.guestUser) {
-        // Verify guest preferences still exist
         const [prefs] = await db
           .select()
           .from(guest_preferences)
-          .where(eq(guest_preferences.session_id, req.sessionID))
+          .where(eq(guest_preferences.guest_id, req.session.guestUser.guestId))
           .limit(1);
 
-        if (prefs) {
+        if (prefs && prefs.session_id === req.sessionID) {
           return res.json(req.session.guestUser);
         } else {
           // Clear invalid guest session
           delete req.session.guestUser;
+          await req.session.save();
         }
       }
 
       if (!req.isAuthenticated() || !req.user) {
-        // Return default guest user object for unauthenticated users
         return res.json({
           id: 0,
           username: 'Guest',
@@ -508,7 +484,7 @@ export function setupAuth(app: Express) {
         });
       }
 
-      // Ensure session is properly saved and extended
+      // Ensure session is properly saved
       req.session.touch();
       await req.session.save();
 
@@ -518,87 +494,8 @@ export function setupAuth(app: Express) {
       console.error('[Auth] Error fetching user info:', error);
       res.status(500).json({ 
         error: "Failed to fetch user info",
-        details: error instanceof Error ? error.message : 'Unknown error'
-      });
-    }
-  });
-
-  app.get("/api/guest-preferences", async (req, res) => {
-    try {
-      const guestId = req.headers['x-guest-id'];
-      
-      if (!req.session.guestUser?.guestId || !guestId) {
-        return res.status(401).json({ 
-          error: "Unauthorized",
-          details: "Missing guest session"
-        });
-      }
-
-      if (req.session.guestUser.guestId !== guestId) {
-        return res.status(401).json({ 
-          error: "Unauthorized",
-          details: "Invalid guest session"
-        });
-      }
-
-      const [preferences] = await db
-        .select()
-        .from(guest_preferences)
-        .where(eq(guest_preferences.guest_id, guestId as string))
-        .limit(1);
-
-      if (!preferences) {
-        return res.status(404).json({
-          error: "Not Found",
-          details: "Guest preferences not found"
-        });
-      }
-
-      // Verify session is still valid
-      if (preferences.session_id !== req.sessionID) {
-        return res.status(401).json({
-          error: "Unauthorized",
-          details: "Session expired"
-        });
-      }
-
-      res.json(preferences.preferences || {});
-    } catch (error) {
-      console.error('[Auth] Error fetching guest preferences:', error);
-      res.status(500).json({ 
-        error: "Failed to fetch guest preferences",
-        details: error instanceof Error ? error.message : 'Unknown error'
-      });
-    }
-  });
-
-  app.post("/api/guest-preferences", async (req, res) => {
-    try {
-      const guestId = req.headers['x-guest-id'];
-      
-      if (!req.session.guestUser?.guestId || !guestId || req.session.guestUser.guestId !== guestId) {
-        return res.status(401).json({ 
-          error: "Unauthorized",
-          details: "Invalid guest session"
-        });
-      }
-
-      await db.update(guest_preferences)
-        .set({ 
-          preferences: req.body,
-          updated_at: new Date()
-        })
-        .where(eq(guest_preferences.guest_id, guestId as string));
-
-      res.json({ 
-        success: true, 
-        preferences: req.body 
-      });
-    } catch (error) {
-      console.error('[Auth] Error updating guest preferences:', error);
-      res.status(500).json({ 
-        error: "Failed to update guest preferences",
-        details: error instanceof Error ? error.message : 'Unknown error'
+        details: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
       });
     }
   });
