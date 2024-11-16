@@ -18,6 +18,7 @@ interface GuestPreferences {
 // Enhanced configuration
 const GUEST_ID_KEY = 'guest_user_id';
 const MAX_RETRY_COUNT = 3;
+const GUEST_RETRY_COUNT = 2;
 const BASE_RETRY_INTERVAL = 2000; // 2 seconds
 const NETWORK_TIMEOUT = 15000; // 15 seconds timeout
 const ERROR_TYPES = {
@@ -30,7 +31,9 @@ const ERROR_TYPES = {
 
 export function useUser() {
   const [retryCount, setRetryCount] = useState(0);
+  const [guestRetryCount, setGuestRetryCount] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [isGuestLoginPending, setIsGuestLoginPending] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
   const [errorType, setErrorType] = useState<keyof typeof ERROR_TYPES | null>(null);
 
@@ -96,44 +99,7 @@ export function useUser() {
       }
 
       // After all retries failed, attempt guest login
-      try {
-        const existingGuestId = localStorage.getItem(GUEST_ID_KEY);
-        console.log('[Auth] Attempting guest login fallback after retry failure');
-        
-        const result = await handleAuthRequest("/guest-login", "POST", undefined, existingGuestId);
-        
-        if (result.ok && result.data?.user) {
-          console.log('[Auth] Guest login successful after retry failure');
-          if (result.data.guestId) {
-            localStorage.setItem(GUEST_ID_KEY, result.data.guestId);
-          }
-          await mutate(result.data.user, false);
-        } else {
-          console.warn('[Auth] Guest login failed, using default guest user');
-          await mutate({
-            id: 0,
-            username: 'Guest',
-            points: 0,
-            isGuest: true,
-            password: ''
-          }, false);
-        }
-      } catch (e) {
-        console.error('[Auth] Failed to restore guest session:', {
-          error: e instanceof Error ? e.message : 'Unknown error',
-          timestamp: new Date().toISOString()
-        });
-        await mutate({
-          id: 0,
-          username: 'Guest',
-          points: 0,
-          isGuest: true,
-          password: ''
-        }, false);
-      } finally {
-        setIsRetrying(false);
-        setRetryCount(0);
-      }
+      await attemptGuestLogin();
     }
   });
 
@@ -143,19 +109,14 @@ export function useUser() {
     {
       revalidateOnFocus: false,
       dedupingInterval: 5000,
-      headers: {
-        'X-Guest-ID': user?.guestId || ''
-      },
       onError: (err) => {
         const errorCategory = categorizeError(err);
-        if (!preferencesError || (err?.status !== 401 && err?.status !== 404)) {
-          console.error('[Auth] Error fetching guest preferences:', {
-            type: errorCategory,
-            error: err?.message || 'Unknown error',
-            status: err?.status,
-            timestamp: new Date().toISOString()
-          });
-        }
+        console.error('[Auth] Error fetching guest preferences:', {
+          type: errorCategory,
+          error: err?.message || 'Unknown error',
+          status: err?.status,
+          timestamp: new Date().toISOString()
+        });
       }
     }
   );
@@ -164,7 +125,9 @@ export function useUser() {
   useEffect(() => {
     return () => {
       setRetryCount(0);
+      setGuestRetryCount(0);
       setIsRetrying(false);
+      setIsGuestLoginPending(false);
       setLastError(null);
       setErrorType(null);
     };
@@ -210,21 +173,14 @@ export function useUser() {
           timestamp: new Date().toISOString()
         });
 
-        if (response.status === 401) {
-          console.warn('[Auth] Session expired or invalid');
-          await mutate(undefined, { revalidate: false });
-          localStorage.removeItem(GUEST_ID_KEY);
-        }
-
         return { 
           ok: false, 
-          message: data?.message || `Authentication failed: ${response.statusText}`,
+          message: data?.message || `Request failed: ${response.statusText}`,
           status: response.status,
           type: errorCategory
         };
       }
 
-      await mutate(data.user || undefined, { revalidate: true });
       return { ok: true, data };
     } catch (e) {
       clearTimeout(timeoutId);
@@ -247,67 +203,70 @@ export function useUser() {
     }
   };
 
-  // Enhanced preference update with proper error handling
-  const updateGuestPreferences = async (newPreferences: GuestPreferences): Promise<RequestResult> => {
-    if (!user?.isGuest || !user.guestId) {
+  // Enhanced guest login with retry mechanism
+  const attemptGuestLogin = async (retryAttempt = 0): Promise<RequestResult> => {
+    try {
+      const existingGuestId = localStorage.getItem(GUEST_ID_KEY);
+      const result = await handleAuthRequest("/guest-login", "POST", undefined, existingGuestId);
+      
+      if (result.ok && result.data?.guestId) {
+        localStorage.setItem(GUEST_ID_KEY, result.data.guestId);
+        await mutate(result.data.user);
+        setGuestRetryCount(0);
+        setIsGuestLoginPending(false);
+        return result;
+      }
+      
+      if (retryAttempt < GUEST_RETRY_COUNT) {
+        console.log(`[Auth] Retrying guest login (${retryAttempt + 1}/${GUEST_RETRY_COUNT})`);
+        await new Promise(resolve => setTimeout(resolve, getRetryDelay(retryAttempt)));
+        return attemptGuestLogin(retryAttempt + 1);
+      }
+      
+      throw new Error(result.message || 'Guest login failed after retries');
+    } catch (error) {
+      console.error('[Auth] Guest login error:', error);
+      setIsGuestLoginPending(false);
       return {
         ok: false,
-        message: "Only valid guest users can update preferences",
-        status: 403,
-        type: 'AUTH'
+        message: error instanceof Error ? error.message : 'Guest login failed',
+        status: 0,
+        type: 'UNKNOWN'
       };
     }
+  };
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), NETWORK_TIMEOUT);
-
+  const guestLogin = async () => {
     try {
-      const response = await fetch("/api/guest-preferences", {
-        method: "POST",
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Guest-ID': user.guestId
-        },
-        body: JSON.stringify(newPreferences),
-        credentials: 'include',
-        signal: controller.signal
-      });
-
-      clearTimeout(timeoutId);
-      const data = await response.json();
-
-      if (!response.ok) {
-        const errorCategory = categorizeError({ status: response.status });
-        return {
-          ok: false,
-          message: data.error || "Failed to update preferences",
-          status: response.status,
-          type: errorCategory
-        };
-      }
-
-      await mutatePreferences(data.preferences);
-      return { ok: true, data };
-    } catch (error) {
-      clearTimeout(timeoutId);
-      const errorCategory = categorizeError(error);
+      setIsGuestLoginPending(true);
+      setLastError(null);
+      setErrorType(null);
+      setGuestRetryCount(0);
       
-      console.error('[Auth] Preferences update error:', {
-        type: errorCategory,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        timestamp: new Date().toISOString()
-      });
-
+      const result = await attemptGuestLogin();
+      
+      if (!result.ok) {
+        setLastError(result.message);
+        setErrorType(result.type || 'UNKNOWN');
+      }
+      
+      return result;
+    } catch (error) {
+      setIsGuestLoginPending(false);
+      const errorCategory = categorizeError(error);
+      setLastError(error instanceof Error ? error.message : 'Guest login failed');
+      setErrorType(errorCategory);
+      
       return {
         ok: false,
-        message: error instanceof Error ? error.message : "Failed to update preferences",
+        message: error instanceof Error ? error.message : 'Guest login failed',
         status: 0,
         type: errorCategory
       };
     }
   };
 
-  // Enhanced authentication methods with proper error handling
+  // Authentication methods
   const login = async (user: InsertUser) => {
     localStorage.removeItem(GUEST_ID_KEY);
     setLastError(null);
@@ -315,76 +274,33 @@ export function useUser() {
     return handleAuthRequest("/login", "POST", user);
   };
 
-  const guestLogin = async () => {
-    try {
-      const existingGuestId = localStorage.getItem(GUEST_ID_KEY);
-      setLastError(null);
-      setErrorType(null);
-      const result = await handleAuthRequest("/guest-login", "POST", undefined, existingGuestId);
-      
-      if (result.ok && result.data?.guestId) {
-        localStorage.setItem(GUEST_ID_KEY, result.data.guestId);
-      }
-      
-      return result;
-    } catch (error) {
-      const errorCategory = categorizeError(error);
-      console.error('[Auth] Guest login error:', {
-        type: errorCategory,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        timestamp: new Date().toISOString()
-      });
-      return {
-        ok: false,
-        message: error instanceof Error ? error.message : "Guest login failed",
-        status: 0,
-        type: errorCategory
-      };
-    }
-  };
-
   const logout = async () => {
     try {
-      // Clear guest ID from localStorage first
       localStorage.removeItem(GUEST_ID_KEY);
       setLastError(null);
       setErrorType(null);
       
-      // Clear guest preferences if user is a guest
       if (user?.isGuest && user?.guestId) {
         try {
-          console.log('[Auth] Clearing guest preferences before logout');
           await mutatePreferences(undefined, false);
         } catch (prefError) {
           console.error('[Auth] Failed to clear guest preferences:', prefError);
-          // Continue with logout even if preference clearing fails
         }
       }
 
-      // Clear user data first to prevent flickering
       await mutate(undefined, { revalidate: false });
-      
       const result = await handleAuthRequest("/logout", "POST");
       
       if (!result.ok) {
-        console.warn('[Auth] Logout failed:', result.message);
-        // Force cleanup even if server request fails
         await mutate(undefined, { revalidate: true });
       }
       
-      // Clear all SWR cache
       await mutate(() => true, undefined, { revalidate: false });
-      
       return result;
     } catch (error) {
       const errorCategory = categorizeError(error);
-      console.error('[Auth] Logout error:', {
-        type: errorCategory,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        timestamp: new Date().toISOString()
-      });
+      console.error('[Auth] Logout error:', error);
       
-      // Force state cleanup on error
       await mutate(undefined, { revalidate: true });
       await mutate(() => true, undefined, { revalidate: false });
       
@@ -409,6 +325,7 @@ export function useUser() {
     preferences: preferences || {},
     isLoading: !userError && !user,
     isRetrying,
+    isGuestLoginPending,
     isError: userError && userError.status !== 401,
     error: userError,
     lastError,
@@ -418,7 +335,6 @@ export function useUser() {
     guestLogin,
     logout,
     register,
-    updateGuestPreferences,
   };
 }
 
