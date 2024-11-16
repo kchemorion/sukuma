@@ -276,33 +276,57 @@ export function useUser() {
 
   const logout = async () => {
     try {
+      // Clear guest ID first to prevent race conditions
       localStorage.removeItem(GUEST_ID_KEY);
       setLastError(null);
       setErrorType(null);
       
+      // Enhanced guest cleanup
       if (user?.isGuest && user?.guestId) {
         try {
+          // Clear guest preferences first
           await mutatePreferences(undefined, false);
+          console.log('[Auth] Cleared guest preferences for:', user.guestId);
         } catch (prefError) {
-          console.error('[Auth] Failed to clear guest preferences:', prefError);
+          console.error('[Auth] Failed to clear guest preferences:', {
+            error: prefError instanceof Error ? prefError.message : 'Unknown error',
+            guestId: user.guestId,
+            timestamp: new Date().toISOString()
+          });
         }
       }
 
+      // Clear user data before server request to prevent UI flicker
       await mutate(undefined, { revalidate: false });
+      
+      // Perform server logout
       const result = await handleAuthRequest("/logout", "POST");
       
       if (!result.ok) {
+        console.error('[Auth] Logout request failed:', {
+          error: result.message,
+          type: result.type,
+          timestamp: new Date().toISOString()
+        });
+        
+        // Revalidate user data if server logout fails
         await mutate(undefined, { revalidate: true });
       }
       
-      await mutate(() => true, undefined, { revalidate: false });
+      // Clear all SWR cache
+      await mutate(undefined, false);
+      
       return result;
     } catch (error) {
       const errorCategory = categorizeError(error);
-      console.error('[Auth] Logout error:', error);
+      console.error('[Auth] Logout error:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        type: errorCategory,
+        timestamp: new Date().toISOString()
+      });
       
+      // Force state cleanup on error
       await mutate(undefined, { revalidate: true });
-      await mutate(() => true, undefined, { revalidate: false });
       
       return {
         ok: false,

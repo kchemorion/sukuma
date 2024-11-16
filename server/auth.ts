@@ -359,10 +359,10 @@ export function setupAuth(app: Express) {
     });
 
     try {
-      // Handle guest session cleanup
+      // Enhanced guest session cleanup
       if (isGuest && guestId) {
         try {
-          // Verify guest preferences exist before cleanup
+          // First, find and verify the guest preferences
           const [existingPrefs] = await db
             .select()
             .from(guest_preferences)
@@ -371,16 +371,24 @@ export function setupAuth(app: Express) {
             .limit(1);
 
           if (existingPrefs) {
-            // Clean up guest preferences
+            // Delete guest preferences with verified session
             await db.delete(guest_preferences)
               .where(eq(guest_preferences.guest_id, guestId))
               .where(eq(guest_preferences.session_id, sessionID));
-            
-            console.log('[Auth] Cleaned up guest preferences:', { guestId, sessionID });
+          
+            console.log('[Auth] Cleaned up guest preferences:', { 
+              guestId, 
+              sessionID,
+              timestamp: new Date().toISOString()
+            });
           }
         } catch (error) {
-          console.error('[Auth] Error cleaning guest preferences:', error);
-          // Continue with logout even if preference cleanup fails
+          console.error('[Auth] Error cleaning guest preferences:', {
+            error: error instanceof Error ? error.message : 'Unknown error',
+            guestId,
+            sessionID,
+            timestamp: new Date().toISOString()
+          });
         }
 
         // Clear guest user from session
@@ -391,21 +399,33 @@ export function setupAuth(app: Express) {
       if (req.isAuthenticated()) {
         await new Promise<void>((resolve, reject) => {
           req.logout((err) => {
-            if (err) reject(err);
-            else resolve();
+            if (err) {
+              console.error('[Auth] Logout error:', err);
+              reject(err);
+            } else {
+              resolve();
+            }
           });
         });
       }
 
-      // Destroy session with proper error handling
+      // Destroy session with enhanced error handling
       await new Promise<void>((resolve, reject) => {
         req.session.destroy((err) => {
-          if (err) reject(err);
-          else resolve();
+          if (err) {
+            console.error('[Auth] Session destruction error:', {
+              error: err instanceof Error ? err.message : 'Unknown error',
+              sessionID,
+              timestamp: new Date().toISOString()
+            });
+            reject(err);
+          } else {
+            resolve();
+          }
         });
       });
 
-      // Get domain settings from server configuration
+      // Enhanced cookie cleanup with proper domain settings
       const domain = req.hostname.includes('localhost') ? undefined : 
                     req.hostname.includes('.repl.co') ? '.repl.co' : 
                     req.hostname;
@@ -414,10 +434,11 @@ export function setupAuth(app: Express) {
         sessionID,
         isGuest,
         guestId,
-        domain
+        domain,
+        timestamp: new Date().toISOString()
       });
 
-      // Clear session cookie with proper domain settings
+      // Clear session cookie with proper settings
       res.clearCookie('sukuma.sid', {
         path: '/',
         httpOnly: true,
@@ -425,17 +446,26 @@ export function setupAuth(app: Express) {
         sameSite: process.env.NODE_ENV === "production" ? 'none' : 'lax',
         domain
       });
-      
+    
       res.json({ 
         message: "Logout successful",
         success: true,
-        wasGuest: isGuest
+        wasGuest: isGuest,
+        timestamp: new Date().toISOString()
       });
     } catch (error) {
-      console.error('[Auth] Logout error:', error);
+      console.error('[Auth] Logout error:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        sessionID,
+        isGuest,
+        guestId,
+        timestamp: new Date().toISOString()
+      });
+
       res.status(500).json({ 
         message: "Logout failed", 
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
       });
     }
   });
