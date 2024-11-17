@@ -18,6 +18,14 @@ externalPort = 3000
 localPort = 5000
 externalPort = 80
 
+[[ports]]
+localPort = 5173
+externalPort = 5173
+
+[[ports]]
+localPort = 5174
+externalPort = 3001
+
 [packager]
 language = "nodejs"
 [packager.features]
@@ -47,6 +55,26 @@ args = "Start Application"
 task = "workflow.run"
 args = "Database Schema Update"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Client Application"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Client Development"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Client Dev"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Server"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Client"
+
 [[workflows.workflow]]
 name = "Start Application"
 author = "agent"
@@ -75,3 +103,78 @@ task = "packager.installForAll"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npm run db:push"
+
+[[workflows.workflow]]
+name = "Client Application"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd client && npm run dev"
+waitForPort = 5173
+
+[[workflows.workflow]]
+name = "Client Development"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd client && npx vite --port 5173 --host 0.0.0.0"
+waitForPort = 5173
+
+[[workflows.workflow]]
+name = "Client Dev"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd client && VITE_STRIPE_PUBLISHABLE_KEY=$STRIPE_PUBLISHABLE_KEY VITE_API_URL=http://localhost:3000 npx vite --port 5173 --host 0.0.0.0"
+waitForPort = 5173
+
+[[workflows.workflow]]
+name = "Server"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run dev"
+waitForPort = 3000
+
+[[workflows.workflow]]
+name = "Client"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd client && VITE_STRIPE_PUBLISHABLE_KEY=$STRIPE_PUBLISHABLE_KEY VITE_API_URL=http://localhost:3000 npx vite --port 5173 --host 0.0.0.0"
+waitForPort = 5173

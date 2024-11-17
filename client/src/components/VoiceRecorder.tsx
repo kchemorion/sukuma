@@ -23,6 +23,7 @@ import type { Channel, Post } from 'db/schema';
 import useSWR from 'swr';
 import { useState, useCallback, useEffect } from 'react';
 import * as Tone from 'tone';
+import WaveSurfer from 'wavesurfer.js';
 
 // Initialize Tone.js with proper error handling
 async function initializeTone() {
@@ -61,7 +62,10 @@ export function VoiceRecorder({ replyingTo, onSuccess }: VoiceRecorderProps) {
     audioBlob,
     duration,
     isUploading,
-    setIsUploading
+    setIsUploading,
+    audioLevel,
+    error: recordingError,
+    cleanup
   } = useAudioRecorder();
   
   const { currentEffect, setCurrentEffect, applyEffect } = useAudioEffects();
@@ -267,6 +271,39 @@ export function VoiceRecorder({ replyingTo, onSuccess }: VoiceRecorderProps) {
     }
   }
 
+  // Initialize WaveSurfer for waveform visualization
+  useEffect(() => {
+    const wavesurfer = WaveSurfer.create({
+      container: '#waveform',
+      waveColor: '#ccc',
+      progressColor: '#333',
+      barWidth: 2,
+      barHeight: 1,
+      cursorWidth: 0,
+      cursorColor: 'transparent',
+      height: 50,
+      responsive: true,
+      backend: 'MediaElement'
+    });
+
+    // Update the waveform when a new audioBlob is available
+    if (audioBlob) {
+      wavesurfer.loadBlob(audioBlob);
+    }
+
+    // Cleanup WaveSurfer instance on component unmount
+    return () => {
+      wavesurfer.destroy();
+    };
+  }, [audioBlob]);
+
+  // Cleanup the audio recorder on component unmount
+  useEffect(() => {
+    return () => {
+      cleanup();
+    };
+  }, []);
+
   return (
     <DialogContent>
       <DialogHeader>
@@ -276,71 +313,41 @@ export function VoiceRecorder({ replyingTo, onSuccess }: VoiceRecorderProps) {
         <DialogDescription>
           {replyingTo 
             ? `Record your voice reply to ${replyingTo.username}'s post`
-            : 'Record your voice note, add effects, and optionally select a channel to post to'
+            : 'Record your voice note with enhanced audio quality'
           }
         </DialogDescription>
       </DialogHeader>
       
       <div className="space-y-4 pt-4">
+        {recordingError && (
+          <div className="text-sm text-destructive text-center">
+            {recordingError}
+          </div>
+        )}
+
         {initializationError && (
           <div className="text-sm text-destructive text-center">
             {initializationError}
           </div>
         )}
 
-        <VoiceEffectSelector 
-          currentEffect={currentEffect}
-          onEffectChange={setCurrentEffect}
-        />
-        
-        {!replyingTo && (
-          <div className="space-y-2">
-            <div className="relative">
-              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search channels..."
-                value={searchQuery}
-                onChange={handleSearch}
-                className="pl-8"
-                aria-label="Search channels"
-              />
-            </div>
-            
-            {isLoadingChannels ? (
-              <div className="flex items-center justify-center p-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span className="ml-2 text-sm text-muted-foreground">Loading channels...</span>
-              </div>
-            ) : (
-              <Select
-                value={selectedChannel ?? undefined}
-                onValueChange={setSelectedChannel}
-                disabled={isLoadingChannels}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a channel (optional)" />
-                </SelectTrigger>
-                <SelectContent>
-                  {filteredChannels.map((channel) => (
-                    <SelectItem
-                      key={channel.id}
-                      value={channel.id.toString()}
-                    >
-                      {channel.name}
-                    </SelectItem>
-                  ))}
-                  {filteredChannels.length === 0 && (
-                    <div className="p-2 text-sm text-muted-foreground text-center">
-                      No channels found
-                    </div>
-                  )}
-                </SelectContent>
-              </Select>
-            )}
-          </div>
-        )}
+        <div className="relative">
+          {/* Audio waveform visualization */}
+          <div id="waveform" className="w-full h-[50px] bg-secondary rounded-lg overflow-hidden" />
+          
+          {/* Live audio level visualization during recording */}
+          {isRecording && (
+            <div 
+              className="absolute bottom-0 left-0 w-full h-1 bg-primary transition-transform"
+              style={{
+                transform: `scaleY(${audioLevel / 255})`,
+                transformOrigin: 'bottom'
+              }}
+            />
+          )}
+        </div>
 
-        <div className="flex justify-center" role="region" aria-label="Voice recording controls">
+        <div className="flex justify-center space-x-4" role="region" aria-label="Voice recording controls">
           <Button
             size="lg"
             variant={isRecording ? 'destructive' : 'default'}
@@ -374,7 +381,7 @@ export function VoiceRecorder({ replyingTo, onSuccess }: VoiceRecorderProps) {
             {isUploading ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Uploading...
+                Processing and Uploading...
               </>
             ) : (
               replyingTo ? 'Post Reply' : 'Post Voice Note'

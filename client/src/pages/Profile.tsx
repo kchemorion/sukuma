@@ -7,9 +7,11 @@ import { PointsStats } from '@/components/PointsStats';
 import { LoadingState } from '@/components/LoadingState';
 import { EmptyState } from '@/components/EmptyState';
 import { Skeleton } from '@/components/ui/skeleton';
+import { PremiumSubscription } from '@/components/PremiumSubscription';
 import useSWR from 'swr';
 import type { Post } from 'db/schema';
-import { Star } from 'lucide-react';
+import { Star, Crown } from 'lucide-react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export function Profile() {
   const { user } = useUser();
@@ -72,7 +74,12 @@ export function Profile() {
               <AvatarFallback>{user.username[0].toUpperCase()}</AvatarFallback>
             </Avatar>
             <div className="space-y-2">
-              <h2 className="text-2xl font-bold">{user.username}</h2>
+              <div className="flex items-center space-x-2">
+                <h2 className="text-2xl font-bold">{user.username}</h2>
+                {user.is_premium && (
+                  <Crown className="h-5 w-5 text-yellow-500 fill-current" />
+                )}
+              </div>
               <div className="flex items-center space-x-4">
                 <p className="text-muted-foreground">
                   {userPosts.length} voice posts
@@ -82,27 +89,62 @@ export function Profile() {
                   <span>{user.points} Sukuma Points</span>
                 </div>
               </div>
+              {user.is_premium && (
+                <p className="text-sm text-muted-foreground">
+                  Premium member until {new Date(user.premium_until!).toLocaleDateString()}
+                </p>
+              )}
             </div>
           </div>
         </Card>
 
-        <PointsStats points={user.points} postCount={userPosts.length} />
+        <Tabs defaultValue={user.is_premium ? "posts" : "premium"}>
+          <TabsList>
+            <TabsTrigger value="posts">Voice Posts</TabsTrigger>
+            <TabsTrigger value="premium">Premium Features</TabsTrigger>
+          </TabsList>
 
-        <div className="space-y-4">
-          <h3 className="text-xl font-semibold">Voice Posts</h3>
-          {userPosts.length > 0 ? (
-            userPosts.map((post) => (
-              <Card key={post.id} className="p-4">
-                <VoicePost post={post} />
+          <TabsContent value="posts" className="space-y-4">
+            <h3 className="text-xl font-semibold">Voice Posts</h3>
+            {userPosts.length > 0 ? (
+              userPosts.map((post) => (
+                <Card key={post.id} className="p-4">
+                  <VoicePost post={post} />
+                </Card>
+              ))
+            ) : (
+              <EmptyState 
+                title="No Voice Posts Yet"
+                description="Start sharing your voice with the community!"
+              />
+            )}
+          </TabsContent>
+
+          <TabsContent value="premium" className="space-y-4">
+            <h3 className="text-xl font-semibold">Premium Subscription</h3>
+            {user.is_premium ? (
+              <Card className="p-6">
+                <div className="space-y-4">
+                  <div className="flex items-center space-x-2">
+                    <Crown className="h-6 w-6 text-yellow-500 fill-current" />
+                    <h4 className="text-lg font-semibold">Active Premium Membership</h4>
+                  </div>
+                  <p>Enjoy your premium benefits including:</p>
+                  <ul className="list-disc list-inside space-y-2">
+                    <li>Ad-free experience</li>
+                    <li>Premium voice effects</li>
+                    <li>Exclusive channel access</li>
+                    <li>Points multiplier</li>
+                  </ul>
+                </div>
               </Card>
-            ))
-          ) : (
-            <EmptyState 
-              title="No Voice Posts Yet"
-              description="Start sharing your voice with the community!"
-            />
-          )}
-        </div>
+            ) : (
+              <PremiumSubscription />
+            )}
+          </TabsContent>
+        </Tabs>
+
+        <PointsStats points={user.points} postCount={userPosts.length} />
       </div>
     </Layout>
   );
