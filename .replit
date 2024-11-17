@@ -176,5 +176,5 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd client && VITE_STRIPE_PUBLISHABLE_KEY=$STRIPE_PUBLISHABLE_KEY VITE_API_URL=http://localhost:3000 npx vite --port 5173 --host 0.0.0.0"
+args = "cd client && VITE_API_URL=http://localhost:3000 npx vite --port 5173 --host 0.0.0.0"
 waitForPort = 5173

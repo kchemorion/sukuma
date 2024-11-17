@@ -15,20 +15,43 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://0.0.0.0:3000',
+        target: 'http://localhost:3000',
         changeOrigin: true,
         secure: false,
-        ws: true
+        ws: true,
+        configure: (proxy, _options) => {
+          proxy.on('error', (err, _req, _res) => {
+            console.error('[Proxy] Error:', err);
+          });
+          proxy.on('proxyReq', (proxyReq, req, _res) => {
+            proxyReq.setHeader('Origin', 'http://localhost:5173');
+            console.log('[Proxy] Sending Request:', req.method, req.url);
+          });
+          proxy.on('proxyRes', (proxyRes, req, _res) => {
+            console.log('[Proxy] Received Response:', proxyRes.statusCode, req.url);
+          });
+        }
+      },
+      '/guest-login': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+        secure: false
       },
       '/uploads': {
-        target: 'http://0.0.0.0:3000',
+        target: 'http://localhost:3000',
         changeOrigin: true,
         secure: false
       }
+    },
+    cors: {
+      origin: true,
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Guest-ID']
     }
   },
-  define: {
-    '__STRIPE_PUBLISHABLE_KEY__': JSON.stringify(process.env.STRIPE_PUBLISHABLE_KEY),
-    '__API_URL__': JSON.stringify('http://0.0.0.0:3000')
+  build: {
+    outDir: '../dist/public',
+    emptyOutDir: true
   }
 });

@@ -32,6 +32,7 @@ if (!process.env.SESSION_SECRET) {
 
 const isProduction = process.env.NODE_ENV === "production";
 const isReplit = process.env.REPL_ID && process.env.REPL_OWNER && process.env.REPL_SLUG;
+const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
 // Improved domain configuration
 const getDomain = () => {
@@ -41,7 +42,7 @@ const getDomain = () => {
   if (isProduction && process.env.APP_DOMAIN) {
     return process.env.APP_DOMAIN;
   }
-  return 'localhost:3000';
+  return '0.0.0.0';
 };
 
 const domain = getDomain();
@@ -82,13 +83,50 @@ sessionPool.on('connect', () => {
     // Configure trust proxy for secure cookies behind Replit proxy
     app.set('trust proxy', isReplit || isProduction ? 1 : 0);
 
-    // Basic middleware with enhanced error handling
+    // Basic security middleware
     app.use((req: Request, res: Response, next: NextFunction) => {
-      if (req.path.startsWith('/api/')) {
-        res.type('application/json');
-      }
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('X-Frame-Options', 'DENY');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
       next();
     });
+
+    // Enhanced CORS configuration
+    const corsOptions = {
+      origin: function(origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) {
+        const allowedDomains = [
+          'http://localhost:5173',
+          'http://localhost:3000',
+          'http://0.0.0.0:5173',
+          'http://0.0.0.0:3000',
+          `https://${domain}`,
+          '.repl.co'
+        ];
+
+        if (!origin || !isProduction) {
+          callback(null, true);
+          return;
+        }
+
+        const isAllowed = allowedDomains.some(d => 
+          origin.includes(d) || 
+          (d.startsWith('.') && origin.endsWith(d))
+        );
+
+        if (isAllowed) {
+          callback(null, true);
+        } else {
+          console.warn('[Server] Rejected CORS from origin:', origin);
+          callback(new Error('Not allowed by CORS'));
+        }
+      },
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Guest-ID'],
+      exposedHeaders: ['Set-Cookie']
+    };
+
+    app.use(cors(corsOptions));
 
     // Enhanced JSON middleware with better error handling
     app.use(express.json({ 
@@ -109,52 +147,6 @@ sessionPool.on('connect', () => {
         }
       }
     }));
-
-    // Enhanced CORS configuration
-    const corsOptions = {
-      origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-        if (!origin && !isProduction) {
-          callback(null, true);
-          return;
-        }
-
-        const allowedDomains = [
-          domain,
-          'localhost',
-          'localhost:3000',
-          'localhost:5173', // Add Vite dev server
-          '.repl.co'
-        ];
-
-        const isAllowed = !origin || allowedDomains.some(d => 
-          origin.includes(d) || 
-          (d.startsWith('.') && origin.endsWith(d))
-        );
-
-        if (isAllowed) {
-          callback(null, true);
-        } else {
-          callback(new Error('Not allowed by CORS'));
-        }
-      },
-      credentials: true,
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
-      exposedHeaders: ['Set-Cookie']
-    };
-
-    app.use(cors(corsOptions));
-
-    // Create session table
-    await sessionPool.query(`
-      CREATE TABLE IF NOT EXISTS "session" (
-        "sid" varchar NOT NULL COLLATE "default",
-        "sess" json NOT NULL,
-        "expire" timestamp(6) NOT NULL,
-        CONSTRAINT "session_pkey" PRIMARY KEY ("sid")
-      );
-      CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
-    `);
 
     // Enhanced session store configuration
     const sessionStore = new PostgresqlStore({
@@ -188,32 +180,39 @@ sessionPool.on('connect', () => {
     app.use(passport.initialize());
     app.use(passport.session());
 
-    // Initialize routes
+    // Initialize auth routes first
     setupAuth(app);
+    
+    // Serve static files
+    app.use('/uploads', express.static('uploads'));
+
+    // Initialize API routes
     registerRoutes(app);
 
-    // Static file serving
+    // Static file serving with proper configuration
     if (isProduction) {
       app.use(express.static(path.join(__dirname, 'public')));
+      app.get('*', (_req, res) => {
+        res.sendFile(path.join(__dirname, 'public', 'index.html'));
+      });
     } else {
       await setupVite(app, server);
     }
 
-    // Enhanced error handlers
-    app.use('/api', (err: Error, _req: Request, res: Response, _next: NextFunction) => {
-      console.error('[API Error]', err);
+    // Global error handler
+    app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+      console.error('[Server] Error:', err);
       res.status(500).json({
         error: 'Internal Server Error',
         message: process.env.NODE_ENV === 'development' ? err.message : 'An unexpected error occurred'
       });
     });
 
-    const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
-
+    // Start server
     server.listen(PORT, "0.0.0.0", () => {
       console.log(`[Server] Running at http://0.0.0.0:${PORT}`);
       console.log(`[Server] Environment: ${process.env.NODE_ENV || 'development'}`);
-      console.log(`[Server] Running on Replit:`, isReplit);
+      console.log(`[Server] Running on Replit:`, process.env.REPL_SLUG || false);
       console.log(`[Server] Domain:`, domain);
     });
 
